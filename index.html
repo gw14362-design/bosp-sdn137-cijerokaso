@@ -192,6 +192,22 @@
       const [statusFilter, setStatusFilter] = useState("all");
       const [showGreyRows, setShowGreyRows] = useState(true);
 
+      /* State untuk mengunci/membuka kunci tab bulan agar tanda silang (✕) tidak terklik tidak sengaja */
+      const [isMonthsLocked, setIsMonthsLocked] = useState(() => {
+        try {
+          const saved = localStorage.getItem("sdn137_bosp_months_locked");
+          return saved !== null ? JSON.parse(saved) : true; // Bawaan default selalu terkunci demi keamanan data
+        } catch {
+          return true;
+        }
+      });
+
+      useEffect(() => {
+        try {
+          localStorage.setItem("sdn137_bosp_months_locked", JSON.stringify(isMonthsLocked));
+        } catch (e) {}
+      }, [isMonthsLocked]);
+
       /* State lebar kolom tabel yang fleksibel dan dapat digeser */
       const [colWidths, setColWidths] = useState(() => {
         try {
@@ -1068,6 +1084,46 @@
                   Tabel Realisasi Bulan:
                 </span>
 
+                {/* Tombol Kunci / Buka Kunci Tab Bulan */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMonthsLocked(prev => {
+                      const nextVal = !prev;
+                      tampilkanToast(
+                        nextVal
+                          ? "Tab bulan berhasil dikunci. Tombol hapus (✕) disembunyikan agar aman dari klik tidak sengaja."
+                          : "Kunci tab bulan dibuka. Tombol hapus (✕) kini dapat diakses.",
+                        nextVal ? "sukses" : "peringatan",
+                        nextVal ? "Tab Bulan Dikunci" : "Kunci Tab Dibuka"
+                      );
+                      return nextVal;
+                    });
+                  }}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer select-none ${
+                    isMonthsLocked
+                      ? 'bg-[#A3E635]/15 text-[#A3E635] border-[#A3E635]/40 hover:bg-[#A3E635]/25 shadow-sm'
+                      : 'bg-[#F43F5E]/15 text-[#F43F5E] border-[#F43F5E]/40 hover:bg-[#F43F5E]/25 shadow-sm'
+                  }`}
+                  title={isMonthsLocked ? "Klik untuk membuka kunci (menampilkan tombol hapus ✕)" : "Klik untuk mengunci tab bulan (menyembunyikan tombol hapus ✕)"}
+                >
+                  {isMonthsLocked ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 text-[#A3E635]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                      </svg>
+                      <span>Terkunci</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5 text-[#F43F5E]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path>
+                      </svg>
+                      <span>Buka Kunci</span>
+                    </>
+                  )}
+                </button>
+
                 <div className="flex flex-wrap items-center gap-2">
                   {daftarBulanAktif.length === 0 ? (
                     <span className="text-xs text-[#A2BBC0] italic bg-[#041012] px-3 py-1.5 rounded-xl border border-[#06B6D4]/15">
@@ -1088,7 +1144,7 @@
                         >
                           <button
                             onClick={() => setActiveMonth(bln)}
-                            className="px-3 py-1.5 text-xs font-bold flex items-center gap-2"
+                            className={`px-3 py-1.5 text-xs font-bold flex items-center gap-2 ${isMonthsLocked ? 'pr-3.5' : ''}`}
                           >
                             <span>{bln}</span>
                             <span
@@ -1101,22 +1157,26 @@
                               {totalItem} Rek
                             </span>
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteBulan(bln);
-                            }}
-                            title={`Hapus tabel realisasi bulan ${bln}`}
-                            className={`pr-2.5 pl-1 py-1.5 transition text-xs font-bold hover:scale-110 ${
-                              isActive
-                                ? 'text-[#041012]/70 hover:text-[#F43F5E]'
-                                : 'text-[#A2BBC0]/60 hover:text-[#F43F5E]'
-                            }`}
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                            </svg>
-                          </button>
+                          
+                          {/* Tombol silang (✕) hanya ditampilkan jika status tab sedang dibuka kuncinya */}
+                          {!isMonthsLocked && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteBulan(bln);
+                              }}
+                              title={`Hapus tabel realisasi bulan ${bln}`}
+                              className={`pr-2.5 pl-1 py-1.5 transition text-xs font-bold hover:scale-110 ${
+                                isActive
+                                  ? 'text-[#041012]/70 hover:text-[#F43F5E]'
+                                  : 'text-[#A2BBC0]/60 hover:text-[#F43F5E]'
+                              }`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       );
                     })
