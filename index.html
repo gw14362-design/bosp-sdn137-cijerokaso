@@ -36,6 +36,10 @@
     input[type="date"]::-webkit-calendar-picker-indicator:hover {
       transform: scale(1.15);
     }
+    .baris-header-abu {
+      background-color: #374151 !important;
+      color: #E5E7EB !important;
+    }
     @media print {
       body {
         background-color: white !important;
@@ -56,6 +60,12 @@
       .print-container th, .print-container td {
         border: 1px solid #333 !important;
         padding: 5px;
+      }
+      .print-baris-abu {
+        background-color: #D1D5DB !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        font-weight: bold;
       }
     }
   </style>
@@ -79,6 +89,11 @@
     /* Setelan default data kosong sepenuhnya */
     const INITIAL_DATA = [];
 
+    function hasAngkaKodeRekening(kode) {
+      if (!kode) return false;
+      return /\d/.test(String(kode));
+    }
+
     function formatRupiah(val) {
       const num = Number(val);
       if (isNaN(num)) return "Rp 0";
@@ -90,6 +105,7 @@
     }
 
     function cekKelengkapanSpj(item) {
+      if (!hasAngkaKodeRekening(item.kodeRekening)) return true;
       const adaJumlah = Number(item.jumlah) > 0;
       const adaTanggal = Boolean(item.tanggalRealisasi && String(item.tanggalRealisasi).trim().length > 0);
       const adaBnu = Boolean(item.bnuBpu && String(item.bnuBpu).trim().length > 0);
@@ -205,7 +221,7 @@
           localStorage.setItem("sdn137_bosp_last_saved", nowStr);
           setLastSaved(nowStr);
           tampilkanToast(
-            `Seluruh data progres pembukuan TA ${tahunAnggaran} (${items.length} rekening di semua bulan) berhasil disimpan secara aman ke penyimpanan lokal browser.`,
+            `Seluruh data progres pembukuan TA ${tahunAnggaran} (${items.length} rekening) berhasil disimpan ke memori browser.`,
             "sukses",
             "Progres Berhasil Disimpan"
           );
@@ -219,14 +235,12 @@
         return items.filter(it => !it.tahun || Number(it.tahun) === Number(tahunAnggaran));
       }, [items, tahunAnggaran]);
 
-      /* SEMUA BULAN YANG SUDAH DIPILIH / DIBUAT TABEL REALISASINYA */
       const daftarBulanAktif = useMemo(() => {
         const bulanDariData = itemsTahun.map(it => it.bulan);
         const setBulan = new Set([...selectedMonths, ...bulanDariData, ...(activeMonth ? [activeMonth] : [])]);
         return DAFTAR_BULAN.filter(b => setBulan.has(b));
       }, [selectedMonths, itemsTahun, activeMonth]);
 
-      // Otomatis sinkronkan bulan aktif jika ada bulan yang dibuat/tersedia
       useEffect(() => {
         if (!activeMonth && daftarBulanAktif.length > 0) {
           setActiveMonth(daftarBulanAktif[0]);
@@ -259,8 +273,11 @@
         let totalAlokasi = 0;
         let totalRealisasi = 0;
         let lengkapCount = 0;
+        let countRekeningTransaksi = 0;
 
         itemsTahun.forEach(it => {
+          if (!hasAngkaKodeRekening(it.kodeRekening)) return;
+          countRekeningTransaksi++;
           const j = Number(it.jumlah) || 0;
           const r = Number(it.realisasiBelanja) || 0;
           totalAlokasi += j;
@@ -269,17 +286,16 @@
         });
 
         const totalSelisih = totalAlokasi - totalRealisasi;
-        const countTotal = itemsTahun.length;
         const persenRealisasi = totalAlokasi > 0 ? Math.min(100, Math.round((totalRealisasi / totalAlokasi) * 100)) : 0;
-        const persenSpj = countTotal > 0 ? Math.round((lengkapCount / countTotal) * 100) : 0;
+        const persenSpj = countRekeningTransaksi > 0 ? Math.round((lengkapCount / countRekeningTransaksi) * 100) : 0;
 
         return {
           totalAlokasi,
           totalRealisasi,
           totalSelisih,
           lengkapCount,
-          countTotal,
-          countBelum: countTotal - lengkapCount,
+          countTotal: countRekeningTransaksi,
+          countBelum: countRekeningTransaksi - lengkapCount,
           persenRealisasi,
           persenSpj
         };
@@ -289,6 +305,7 @@
         let totalJumlah = 0;
         let totalRealisasi = 0;
         itemsBulan.forEach(it => {
+          if (!hasAngkaKodeRekening(it.kodeRekening)) return;
           totalJumlah += Number(it.jumlah) || 0;
           totalRealisasi += Number(it.realisasiBelanja) || 0;
         });
@@ -300,7 +317,7 @@
       }, [itemsBulan]);
 
       const pendingItems = useMemo(() => {
-        return itemsTahun.filter(it => !cekKelengkapanSpj(it));
+        return itemsTahun.filter(it => hasAngkaKodeRekening(it.kodeRekening) && !cekKelengkapanSpj(it));
       }, [itemsTahun]);
 
       const handleInlineUpdate = (id, field, value) => {
@@ -355,14 +372,10 @@
       };
 
       const handleDeleteBulan = (bulan) => {
-        // Hapus bulan dari daftar bulan terpilih
         const updatedSelected = selectedMonths.filter(b => b !== bulan);
         setSelectedMonths(updatedSelected);
-
-        // Hapus rekening yang terikat pada bulan tersebut di tahun anggaran aktif
         setItems(prev => prev.filter(it => !(it.bulan === bulan && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)))));
 
-        // Jika bulan yang dihapus sedang dibuka, alihkan ke bulan lain yang tersisa atau kosongkan
         if (activeMonth === bulan) {
           const sisaBulan = DAFTAR_BULAN.filter(b => updatedSelected.includes(b) && b !== bulan);
           setActiveMonth(sisaBulan.length > 0 ? sisaBulan[0] : "");
@@ -373,9 +386,10 @@
 
       const handleSaveRekening = (e) => {
         e.preventDefault();
-        const volume = parseFloat(formState.volume) || 1;
-        const tarif = parseFloat(formState.tarifHarga) || 0;
-        const jumlah = volume * tarif;
+        const isHeader = !hasAngkaKodeRekening(formState.kodeRekening);
+        const volume = isHeader ? 0 : (parseFloat(formState.volume) || 1);
+        const tarif = isHeader ? 0 : (parseFloat(formState.tarifHarga) || 0);
+        const jumlah = isHeader ? 0 : (volume * tarif);
 
         if (editingItem) {
           setItems(prev => prev.map(it => {
@@ -387,14 +401,15 @@
                 uraian: formState.uraian.trim(),
                 penjelasan: formState.penjelasan.trim(),
                 volume,
-                satuan: formState.satuan.trim(),
+                satuan: isHeader ? "" : formState.satuan.trim(),
                 tarifHarga: tarif,
-                jumlah
+                jumlah,
+                realisasiBelanja: isHeader ? 0 : (it.realisasiBelanja || 0)
               };
             }
             return it;
           }));
-          tampilkanToast("Rincian rekening anggaran diperbarui.", "sukses", "Data Disimpan");
+          tampilkanToast("Rincian baris rekening/judul diperbarui.", "sukses", "Data Disimpan");
         } else {
           const newItem = {
             id: "bosp_" + Date.now(),
@@ -404,7 +419,7 @@
             uraian: formState.uraian.trim(),
             penjelasan: formState.penjelasan.trim(),
             volume,
-            satuan: formState.satuan.trim(),
+            satuan: isHeader ? "" : formState.satuan.trim(),
             tarifHarga: tarif,
             jumlah,
             tanggalRealisasi: "",
@@ -415,7 +430,7 @@
           setItems(prev => [...prev, newItem]);
           setActiveMonth(formState.bulan);
           setSelectedMonths(prev => prev.includes(formState.bulan) ? prev : [...prev, formState.bulan]);
-          tampilkanToast(`Rekening baru ditambahkan ke bulan ${formState.bulan}.`, "sukses", "Berhasil");
+          tampilkanToast(`Baris baru ditambahkan ke bulan ${formState.bulan}.`, "sukses", "Berhasil");
         }
         setIsRekeningModalOpen(false);
       };
@@ -431,31 +446,36 @@
         const rows = [headers];
         if (dataBulan.length > 0) {
           dataBulan.forEach((it, idx) => {
-            const j = Number(it.jumlah) || 0;
-            const r = Number(it.realisasiBelanja) || 0;
-            rows.push([
-              idx + 1,
-              it.kodeRekening || "",
-              it.uraian || "",
-              it.penjelasan || "",
-              it.volume || 1,
-              it.satuan || "",
-              it.tarifHarga || 0,
-              j,
-              it.tanggalRealisasi || "",
-              it.bnuBpu || "",
-              r,
-              j - r,
-              it.namaToko || "",
-              cekKelengkapanSpj(it) ? "Terealisasi Lengkap (SPJ Siap)" : "Belum Lengkap"
-            ]);
+            const hasKode = hasAngkaKodeRekening(it.kodeRekening);
+            if (!hasKode) {
+              rows.push([
+                idx + 1,
+                it.kodeRekening || "",
+                it.uraian || "",
+                it.penjelasan || "",
+                "", "", "", "", "", "", "", "", "", ""
+              ]);
+            } else {
+              const j = Number(it.jumlah) || 0;
+              const r = Number(it.realisasiBelanja) || 0;
+              rows.push([
+                idx + 1,
+                it.kodeRekening || "",
+                it.uraian || "",
+                it.penjelasan || "",
+                it.volume || 1,
+                it.satuan || "",
+                it.tarifHarga || 0,
+                j,
+                it.tanggalRealisasi || "",
+                it.bnuBpu || "",
+                r,
+                j - r,
+                it.namaToko || "",
+                cekKelengkapanSpj(it) ? "Terealisasi Lengkap (SPJ Siap)" : "Belum Lengkap"
+              ]);
+            }
           });
-        } else {
-          rows.push([
-            1, "5.1.02.01.01.0024", "Belanja Alat Tulis Kantor (ATK)", "Kertas HVS A4",
-            5, "Rim", 55000, 275000, "2026-01-15", "BNU-001/BOSP", 275000, 0,
-            "CV Edu Mitra SIPLah", "Terealisasi Lengkap (SPJ Siap)"
-          ]);
         }
 
         const fileName = `Realisasi_BOSP_SDN137_${namaBulan}_${tahunAnggaran}.xlsx`;
@@ -560,9 +580,12 @@
               const r = rows[i];
               if (!r || (!r[1] && !r[2])) continue;
 
-              const volume = parseFloat(r[4]) || 1;
-              const tarif = parseFloat(r[6]) || 0;
-              const jumlah = (volume * tarif) > 0 ? (volume * tarif) : (parseFloat(r[7]) || 0);
+              const kode = String(r[1] || "").trim();
+              const isHeader = !hasAngkaKodeRekening(kode);
+
+              const volume = isHeader ? 0 : (parseFloat(r[4]) || 1);
+              const tarif = isHeader ? 0 : (parseFloat(r[6]) || 0);
+              const jumlah = isHeader ? 0 : ((volume * tarif) > 0 ? (volume * tarif) : (parseFloat(r[7]) || 0));
 
               let tanggal = String(r[8] || "").trim();
               if (typeof r[8] === 'number') {
@@ -574,17 +597,17 @@
                 id: `bosp_up_${Date.now()}_${i}`,
                 tahun: tahunAnggaran,
                 bulan: targetUploadMonth,
-                kodeRekening: String(r[1] || "").trim(),
+                kodeRekening: kode,
                 uraian: String(r[2] || "").trim(),
                 penjelasan: String(r[3] || "").trim(),
                 volume,
-                satuan: String(r[5] || "Paket").trim(),
+                satuan: isHeader ? "" : String(r[5] || "Paket").trim(),
                 tarifHarga: tarif,
                 jumlah,
-                tanggalRealisasi: tanggal,
-                bnuBpu: String(r[9] || "").trim(),
-                realisasiBelanja: parseFloat(r[10]) || 0,
-                namaToko: String(r[12] || "").trim()
+                tanggalRealisasi: isHeader ? "" : tanggal,
+                bnuBpu: isHeader ? "" : String(r[9] || "").trim(),
+                realisasiBelanja: isHeader ? 0 : (parseFloat(r[10]) || 0),
+                namaToko: isHeader ? "" : String(r[12] || "").trim()
               });
             }
 
@@ -593,7 +616,7 @@
               setActiveMonth(targetUploadMonth);
               setSelectedMonths(prev => prev.includes(targetUploadMonth) ? prev : [...prev, targetUploadMonth]);
               setIsMonthModalOpen(false);
-              tampilkanToast(`${newItems.length} rekening berhasil diimpor ke bulan ${targetUploadMonth}.`, "sukses", "Impor Berhasil");
+              tampilkanToast(`${newItems.length} baris berhasil diimpor ke bulan ${targetUploadMonth}.`, "sukses", "Impor Berhasil");
             }
           } catch (err) {
             console.error(err);
@@ -759,7 +782,6 @@
               </div>
             </header>
 
-            {}
             <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 relative overflow-hidden shadow-lg">
                 <div className="flex justify-between items-start">
@@ -840,8 +862,6 @@
               </div>
             </section>
 
-            {}
-            {/* Bilah Navigasi: Menampilkan SEMUA bulan yang sudah dipilih/dibuat */}
             <section className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-xl">
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full xl:w-auto">
                 <span className="text-xs uppercase font-semibold text-[#A2BBC0] tracking-wider whitespace-nowrap flex items-center gap-1.5">
@@ -851,7 +871,6 @@
                   Tabel Realisasi Bulan:
                 </span>
 
-                {/* Tombol Tab Cepat Seluruh Bulan yang Telah Dipilih / Dibuat */}
                 <div className="flex flex-wrap items-center gap-2">
                   {daftarBulanAktif.length === 0 ? (
                     <span className="text-xs text-[#A2BBC0] italic bg-[#041012] px-3 py-1.5 rounded-xl border border-[#06B6D4]/15">
@@ -994,7 +1013,6 @@
               </div>
             </section>
 
-            {/* TABEL UTAMA REALISASI */}
             <main className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-[#06B6D4]/15">
                 <div>
@@ -1130,10 +1148,36 @@
                       </tr>
                     ) : (
                       filteredItemsBulan.map((item, index) => {
+                        const hasKode = hasAngkaKodeRekening(item.kodeRekening);
                         const j = Number(item.jumlah) || 0;
                         const r = Number(item.realisasiBelanja) || 0;
                         const selisih = j - r;
                         const isLengkap = cekKelengkapanSpj(item);
+
+                        if (!hasKode) {
+                          return (
+                            <tr
+                              key={item.id}
+                              className="bg-[#374151] hover:bg-[#4B5563] text-gray-200 border-y border-gray-600 transition font-medium cursor-pointer"
+                              onClick={() => handleEditRekening(item)}
+                              title="Baris Kategori / Judul tanpa kode rekening (Klik untuk edit/hapus)"
+                            >
+                              <td className="p-3 text-center font-bold text-gray-400">{index + 1}</td>
+                              <td className="p-3 font-mono text-gray-300 italic">{item.kodeRekening || '-'}</td>
+                              <td className="p-3 font-bold text-white uppercase tracking-wide">{item.uraian || '-'}</td>
+                              <td className="p-3 text-gray-300 text-[11px] leading-relaxed">{item.penjelasan || ''}</td>
+                              <td className="p-3 text-center"></td>
+                              <td className="p-3 text-right"></td>
+                              <td className="p-2 border-x border-gray-600/40"></td>
+                              <td className="p-2 border-r border-gray-600/40"></td>
+                              <td className="p-2 border-r border-gray-600/40"></td>
+                              <td className="p-3 text-right"></td>
+                              <td className="p-2 border-x border-gray-600/40"></td>
+                              <td className="p-3"></td>
+                              <td className="p-3 text-center"></td>
+                            </tr>
+                          );
+                        }
 
                         return (
                           <tr key={item.id} className="hover:bg-[#17363C]/60 transition group border-b border-[#06B6D4]/10">
@@ -1251,7 +1295,6 @@
                     )}
                   </tbody>
 
-                  {/* JUMLAH TOTAL REALISASI DI AKHIR TABEL */}
                   <tfoot className="bg-[#041012] border-t-2 border-[#06B6D4]/40 font-bold text-xs">
                     <tr>
                       <td colSpan="5" className="p-3.5 text-right uppercase tracking-wider text-[#A2BBC0]">
@@ -1276,7 +1319,6 @@
               </div>
             </main>
 
-            {}
             <section className="bg-[#10282C] border border-[#F43F5E]/30 rounded-2xl p-4 sm:p-5 shadow-2xl">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#F43F5E]/20">
                 <div className="flex items-center gap-3">
@@ -1371,13 +1413,11 @@
               </div>
             </section>
 
-            {}
             <footer className="text-center py-4 text-xs text-[#A2BBC0] border-t border-[#06B6D4]/10">
               <p>Sistem Informasi Penatausahaan & Realisasi BOSP — SDN 137 Cijerokaso Kota Bandung</p>
               <p className="text-[11px] text-[#A2BBC0]/70 mt-1">Identitas Warna Resmi SDNCI: Night Cyan Lime (#041012, #10282C, #06B6D4, #A3E635, #F3FEFF, #F43F5E)</p>
             </footer>
 
-            {}
             {isMonthModalOpen && (
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-[#10282C] border border-[#06B6D4]/40 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
@@ -1519,7 +1559,6 @@
               </div>
             )}
 
-            {}
             {isRekeningModalOpen && (
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-[#10282C] border border-[#06B6D4]/40 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
@@ -1552,11 +1591,12 @@
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Kode Rekening</label>
+                        <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">
+                          Kode Rekening <span className="text-[10px] text-[#A3E635] font-normal">(Kosongkan jika baris judul/header)</span>
+                        </label>
                         <input
                           type="text"
-                          required
-                          placeholder="Contoh: 5.1.02.01.01.0024"
+                          placeholder="Contoh: 5.1.02.01.01.0024 atau kosongkan"
                           value={formState.kodeRekening}
                           onChange={(e) => setFormState({ ...formState, kodeRekening: e.target.value })}
                           className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs font-mono text-[#06B6D4] focus:outline-none"
@@ -1565,11 +1605,11 @@
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Uraian Rekening</label>
+                      <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Uraian / Judul Baris</label>
                       <input
                         type="text"
                         required
-                        placeholder="Contoh: Belanja Alat Tulis Kantor (ATK)"
+                        placeholder="Contoh: Belanja ATK atau PENGEMBANGAN STANDAR ISI"
                         value={formState.uraian}
                         onChange={(e) => setFormState({ ...formState, uraian: e.target.value })}
                         className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs text-[#F3FEFF] focus:outline-none"
@@ -1587,30 +1627,36 @@
                       />
                     </div>
 
-                    <div className="bg-[#041012] p-3.5 rounded-xl border border-[#06B6D4]/20 space-y-2">
-                      <span className="text-xs font-bold text-[#06B6D4] block">Rincian Perhitungan Volume, Satuan & Tarif</span>
+                    <div className={`p-3.5 rounded-xl border transition space-y-2 ${
+                      !hasAngkaKodeRekening(formState.kodeRekening)
+                        ? 'bg-[#374151]/50 border-gray-600 opacity-60'
+                        : 'bg-[#041012] border-[#06B6D4]/20'
+                    }`}>
+                      <span className="text-xs font-bold text-[#06B6D4] block">
+                        Rincian Perhitungan Volume, Satuan & Tarif {!hasAngkaKodeRekening(formState.kodeRekening) && "(Otomatis Dikosongkan untuk Baris Judul)"}
+                      </span>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="block text-[11px] text-[#A2BBC0] mb-1">Volume</label>
                           <input
                             type="number"
-                            min="1"
+                            min="0"
                             step="any"
-                            required
-                            value={formState.volume}
+                            disabled={!hasAngkaKodeRekening(formState.kodeRekening)}
+                            value={!hasAngkaKodeRekening(formState.kodeRekening) ? 0 : formState.volume}
                             onChange={(e) => setFormState({ ...formState, volume: e.target.value })}
-                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none disabled:opacity-40"
                           />
                         </div>
                         <div>
                           <label className="block text-[11px] text-[#A2BBC0] mb-1">Satuan</label>
                           <input
                             type="text"
-                            required
+                            disabled={!hasAngkaKodeRekening(formState.kodeRekening)}
                             placeholder="Contoh: Rim, Paket, Buah"
-                            value={formState.satuan}
+                            value={!hasAngkaKodeRekening(formState.kodeRekening) ? "" : formState.satuan}
                             onChange={(e) => setFormState({ ...formState, satuan: e.target.value })}
-                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none disabled:opacity-40"
                           />
                         </div>
                         <div>
@@ -1619,42 +1665,59 @@
                             type="number"
                             min="0"
                             step="any"
-                            required
-                            value={formState.tarifHarga}
+                            disabled={!hasAngkaKodeRekening(formState.kodeRekening)}
+                            value={!hasAngkaKodeRekening(formState.kodeRekening) ? 0 : formState.tarifHarga}
                             onChange={(e) => setFormState({ ...formState, tarifHarga: e.target.value })}
-                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none disabled:opacity-40"
                           />
                         </div>
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-[#06B6D4]/10">
                         <span className="text-xs text-[#A2BBC0]">Total Jumlah Alokasi (Volume × Tarif):</span>
                         <span className="text-sm font-bold text-[#A3E635]">
-                          {formatRupiah((parseFloat(formState.volume) || 0) * (parseFloat(formState.tarifHarga) || 0))}
+                          {!hasAngkaKodeRekening(formState.kodeRekening) ? "-" : formatRupiah((parseFloat(formState.volume) || 0) * (parseFloat(formState.tarifHarga) || 0))}
                         </span>
                       </div>
                     </div>
 
-                    <div className="flex justify-end gap-3 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsRekeningModalOpen(false)}
-                        className="px-4 py-2 rounded-xl bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-5 py-2 rounded-xl bg-[#06B6D4] text-[#041012] text-xs font-bold hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25"
-                      >
-                        Simpan Rekening
-                      </button>
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      {editingItem ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleDeleteRekening(editingItem.id, editingItem.kodeRekening);
+                            setIsRekeningModalOpen(false);
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-[#F43F5E]/15 hover:bg-[#F43F5E]/25 text-[#F43F5E] text-xs font-semibold border border-[#F43F5E]/30 transition flex items-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                          </svg>
+                          Hapus Baris Ini
+                        </button>
+                      ) : <div></div>}
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsRekeningModalOpen(false)}
+                          className="px-4 py-2 rounded-xl bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2 rounded-xl bg-[#06B6D4] text-[#041012] text-xs font-bold hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25"
+                        >
+                          Simpan
+                        </button>
+                      </div>
                     </div>
                   </form>
                 </div>
               </div>
             )}
 
-            {/* Modal Konfirmasi Reset Data Bertahap */}
             {isResetConfirmOpen && (
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-[#10282C] border border-[#F43F5E]/40 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
@@ -1744,7 +1807,6 @@
               </div>
             )}
 
-            {/* Hidden Input Files */}
             <input
               type="file"
               ref={fileInputRef}
@@ -1760,7 +1822,6 @@
               onChange={handleImportBackupJson}
             />
 
-            {}
             {toast.show && (
               <div className="fixed bottom-5 right-5 z-50 max-w-md bg-[#10282C] border border-[#06B6D4]/50 rounded-xl p-4 shadow-2xl flex items-start gap-3">
                 <div className={`mt-0.5 ${toast.type === 'sukses' ? 'text-[#A3E635]' : (toast.type === 'peringatan' ? 'text-[#F43F5E]' : 'text-[#06B6D4]')}`}>
@@ -1781,8 +1842,6 @@
               </div>
             )}
 
-            {}
-            {/* Format Cetak Fisik SPJ */}
             <div className="hidden print-container p-6 bg-white text-black font-serif">
               <div className="text-center border-b-2 border-black pb-4 mb-4">
                 <h2 className="text-xl font-bold uppercase">PEMERINTAH KOTA BANDUNG</h2>
@@ -1790,7 +1849,7 @@
                 <h1 className="text-2xl font-black uppercase">SD NEGERI 137 CIJEROKASO</h1>
                 <p className="text-xs italic">Jl. Cijerokaso No. 137, Sarijadi, Kec. Sukasari, Kota Bandung, Jawa Barat</p>
                 <h4 className="text-sm font-bold mt-2 uppercase underline">
-                  LEMBAR REKONSILIASI & REALISASI BELANJA BOSP — BULAN {activeMonth.toUpperCase()} {tahunAnggaran}
+                  LEMBAR REKONSILIASI & REALISASI BELANJA BOSP — BULAN {activeMonth ? activeMonth.toUpperCase() : "..."} {tahunAnggaran}
                 </h4>
               </div>
 
@@ -1813,6 +1872,16 @@
                 </thead>
                 <tbody>
                   {itemsBulan.map((it, idx) => {
+                    const hasKode = hasAngkaKodeRekening(it.kodeRekening);
+                    if (!hasKode) {
+                      return (
+                        <tr key={it.id} className="print-baris-abu">
+                          <td className="text-center font-bold">{idx + 1}</td>
+                          <td className="font-mono">{it.kodeRekening || '-'}</td>
+                          <td className="font-bold uppercase" colSpan="10">{it.uraian}</td>
+                        </tr>
+                      );
+                    }
                     const j = Number(it.jumlah) || 0;
                     const r = Number(it.realisasiBelanja) || 0;
                     return (
