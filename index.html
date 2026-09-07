@@ -1,0 +1,1875 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Realisasi BOSP - SDN 137 Cijerokaso</title>
+
+  <!-- Google Fonts: Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- SheetJS CDN for Excel Export & Import -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- React 18 & ReactDOM 18 CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel Standalone to compile JSX directly in the browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(1) brightness(1.2) drop-shadow(0 0 2px #06B6D4);
+      cursor: pointer;
+      opacity: 0.95;
+      transition: transform 0.15s ease;
+    }
+    input[type="date"]::-webkit-calendar-picker-indicator:hover {
+      transform: scale(1.15);
+    }
+    @media print {
+      body {
+        background-color: white !important;
+        color: black !important;
+      }
+      header, section, footer, .no-print, button, input, select {
+        display: none !important;
+      }
+      .print-container {
+        display: block !important;
+        color: black !important;
+      }
+      .print-container table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 9.5pt;
+      }
+      .print-container th, .print-container td {
+        border: 1px solid #333 !important;
+        padding: 5px;
+      }
+    }
+  </style>
+</head>
+<body class="bg-[#041012] text-[#F3FEFF] selection:bg-[#06B6D4] selection:text-[#041012]">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const DAFTAR_BULAN = [
+      "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+      "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+    ];
+
+    const STORAGE_KEY = "sdn137_bosp_records_v3";
+    const STORAGE_YEAR_KEY = "sdn137_bosp_year";
+    const STORAGE_SELECTED_MONTHS_KEY = "sdn137_bosp_selected_months";
+
+    /* Setelan default data kosong sepenuhnya */
+    const INITIAL_DATA = [];
+
+    function formatRupiah(val) {
+      const num = Number(val);
+      if (isNaN(num)) return "Rp 0";
+      const bulat = Math.round(num);
+      if (bulat < 0) {
+        return "-Rp " + Math.abs(bulat).toLocaleString('id-ID');
+      }
+      return "Rp " + bulat.toLocaleString('id-ID');
+    }
+
+    function cekKelengkapanSpj(item) {
+      const adaJumlah = Number(item.jumlah) > 0;
+      const adaTanggal = Boolean(item.tanggalRealisasi && String(item.tanggalRealisasi).trim().length > 0);
+      const adaBnu = Boolean(item.bnuBpu && String(item.bnuBpu).trim().length > 0);
+      const adaRealisasi = item.realisasiBelanja !== undefined && item.realisasiBelanja !== null && String(item.realisasiBelanja).trim() !== "" && Number(item.realisasiBelanja) > 0;
+      const selisih = Number(item.jumlah || 0) - Number(item.realisasiBelanja || 0);
+      const adaSelisih = !isNaN(selisih);
+      const adaToko = Boolean(item.namaToko && String(item.namaToko).trim().length > 0);
+
+      return adaJumlah && adaTanggal && adaBnu && adaRealisasi && adaSelisih && adaToko;
+    }
+
+    function periksaKekurangan(item) {
+      const kurang = [];
+      if (!item.tanggalRealisasi || String(item.tanggalRealisasi).trim() === "") kurang.push("Tgl Realisasi");
+      if (!item.bnuBpu || String(item.bnuBpu).trim() === "") kurang.push("BNU/BPU");
+      if (item.realisasiBelanja === undefined || Number(item.realisasiBelanja) <= 0) kurang.push("Realisasi Belanja");
+      if (!item.namaToko || String(item.namaToko).trim() === "") kurang.push("Nama Toko SIPLah");
+      return kurang;
+    }
+
+    function App() {
+      const [tahunAnggaran, setTahunAnggaran] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_YEAR_KEY);
+          return saved ? Number(saved) : 2026;
+        } catch {
+          return 2026;
+        }
+      });
+
+      const [activeMonth, setActiveMonth] = useState("");
+      const [selectedMonths, setSelectedMonths] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_SELECTED_MONTHS_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) return parsed;
+          }
+        } catch (e) {
+          console.warn("Gagal membaca selected months", e);
+        }
+        return [];
+      });
+
+      const [searchTerm, setSearchTerm] = useState("");
+      const [statusFilter, setStatusFilter] = useState("all");
+
+      const [items, setItems] = useState(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) return parsed;
+          }
+        } catch (e) {
+          console.warn("Gagal membaca dari localStorage", e);
+        }
+        return INITIAL_DATA;
+      });
+
+      const [isMonthModalOpen, setIsMonthModalOpen] = useState(false);
+      const [isRekeningModalOpen, setIsRekeningModalOpen] = useState(false);
+      const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+      const [resetStep, setResetStep] = useState(1);
+      const [editingItem, setEditingItem] = useState(null);
+      const [toast, setToast] = useState({ show: false, message: "", type: "info", title: "" });
+      const [targetUploadMonth, setTargetUploadMonth] = useState("Januari");
+
+      const [formState, setFormState] = useState({
+        bulan: "Januari",
+        kodeRekening: "",
+        uraian: "",
+        penjelasan: "",
+        volume: 1,
+        satuan: "Paket",
+        tarifHarga: 0
+      });
+
+      const fileInputRef = useRef(null);
+      const jsonImportRef = useRef(null);
+
+      const [lastSaved, setLastSaved] = useState(() => {
+        try {
+          return localStorage.getItem("sdn137_bosp_last_saved") || "";
+        } catch {
+          return "";
+        }
+      });
+
+      useEffect(() => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+          localStorage.setItem(STORAGE_YEAR_KEY, String(tahunAnggaran));
+          localStorage.setItem(STORAGE_SELECTED_MONTHS_KEY, JSON.stringify(selectedMonths));
+        } catch (err) {
+          console.error("Gagal menyimpan ke localStorage", err);
+        }
+      }, [items, tahunAnggaran, selectedMonths]);
+
+      const tampilkanToast = (message, type = "info", title = "Pemberitahuan") => {
+        setToast({ show: true, message, type, title });
+        setTimeout(() => {
+          setToast(prev => ({ ...prev, show: false }));
+        }, 4000);
+      };
+
+      const handleSimpanProgres = () => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+          localStorage.setItem(STORAGE_YEAR_KEY, String(tahunAnggaran));
+          localStorage.setItem(STORAGE_SELECTED_MONTHS_KEY, JSON.stringify(selectedMonths));
+          const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          localStorage.setItem("sdn137_bosp_last_saved", nowStr);
+          setLastSaved(nowStr);
+          tampilkanToast(
+            `Seluruh data progres pembukuan TA ${tahunAnggaran} (${items.length} rekening di semua bulan) berhasil disimpan secara aman ke penyimpanan lokal browser.`,
+            "sukses",
+            "Progres Berhasil Disimpan"
+          );
+        } catch (err) {
+          console.error(err);
+          tampilkanToast("Gagal menyimpan data progres ke penyimpanan lokal browser.", "peringatan", "Gagal Menyimpan");
+        }
+      };
+
+      const itemsTahun = useMemo(() => {
+        return items.filter(it => !it.tahun || Number(it.tahun) === Number(tahunAnggaran));
+      }, [items, tahunAnggaran]);
+
+      /* SEMUA BULAN YANG SUDAH DIPILIH / DIBUAT TABEL REALISASINYA */
+      const daftarBulanAktif = useMemo(() => {
+        const bulanDariData = itemsTahun.map(it => it.bulan);
+        const setBulan = new Set([...selectedMonths, ...bulanDariData, ...(activeMonth ? [activeMonth] : [])]);
+        return DAFTAR_BULAN.filter(b => setBulan.has(b));
+      }, [selectedMonths, itemsTahun, activeMonth]);
+
+      // Otomatis sinkronkan bulan aktif jika ada bulan yang dibuat/tersedia
+      useEffect(() => {
+        if (!activeMonth && daftarBulanAktif.length > 0) {
+          setActiveMonth(daftarBulanAktif[0]);
+        }
+      }, [daftarBulanAktif, activeMonth]);
+
+      const itemsBulan = useMemo(() => {
+        if (!activeMonth) return [];
+        return itemsTahun.filter(it => it.bulan === activeMonth);
+      }, [itemsTahun, activeMonth]);
+
+      const filteredItemsBulan = useMemo(() => {
+        return itemsBulan.filter(item => {
+          const cocokSearch =
+            searchTerm.trim() === "" ||
+            (item.kodeRekening && item.kodeRekening.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (item.uraian && item.uraian.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (item.penjelasan && item.penjelasan.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (item.namaToko && item.namaToko.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (item.bnuBpu && item.bnuBpu.toLowerCase().includes(searchTerm.toLowerCase()));
+
+          const isLengkap = cekKelengkapanSpj(item);
+          if (statusFilter === "lengkap") return cocokSearch && isLengkap;
+          if (statusFilter === "belum") return cocokSearch && !isLengkap;
+          return cocokSearch;
+        });
+      }, [itemsBulan, searchTerm, statusFilter]);
+
+      const stats = useMemo(() => {
+        let totalAlokasi = 0;
+        let totalRealisasi = 0;
+        let lengkapCount = 0;
+
+        itemsTahun.forEach(it => {
+          const j = Number(it.jumlah) || 0;
+          const r = Number(it.realisasiBelanja) || 0;
+          totalAlokasi += j;
+          totalRealisasi += r;
+          if (cekKelengkapanSpj(it)) lengkapCount++;
+        });
+
+        const totalSelisih = totalAlokasi - totalRealisasi;
+        const countTotal = itemsTahun.length;
+        const persenRealisasi = totalAlokasi > 0 ? Math.min(100, Math.round((totalRealisasi / totalAlokasi) * 100)) : 0;
+        const persenSpj = countTotal > 0 ? Math.round((lengkapCount / countTotal) * 100) : 0;
+
+        return {
+          totalAlokasi,
+          totalRealisasi,
+          totalSelisih,
+          lengkapCount,
+          countTotal,
+          countBelum: countTotal - lengkapCount,
+          persenRealisasi,
+          persenSpj
+        };
+      }, [itemsTahun]);
+
+      const tfootBulan = useMemo(() => {
+        let totalJumlah = 0;
+        let totalRealisasi = 0;
+        itemsBulan.forEach(it => {
+          totalJumlah += Number(it.jumlah) || 0;
+          totalRealisasi += Number(it.realisasiBelanja) || 0;
+        });
+        return {
+          totalJumlah,
+          totalRealisasi,
+          totalSelisih: totalJumlah - totalRealisasi
+        };
+      }, [itemsBulan]);
+
+      const pendingItems = useMemo(() => {
+        return itemsTahun.filter(it => !cekKelengkapanSpj(it));
+      }, [itemsTahun]);
+
+      const handleInlineUpdate = (id, field, value) => {
+        setItems(prevItems => prevItems.map(it => {
+          if (it.id === id) {
+            return {
+              ...it,
+              [field]: field === 'realisasiBelanja' ? (parseFloat(value) || 0) : value
+            };
+          }
+          return it;
+        }));
+      };
+
+      const handleOpenNewRekening = () => {
+        if (!activeMonth && daftarBulanAktif.length === 0) {
+          tampilkanToast("Silakan buat atau pilih tabel realisasi bulan terlebih dahulu.", "peringatan", "Bulan Belum Ada");
+          setIsMonthModalOpen(true);
+          return;
+        }
+        const defaultBln = activeMonth || daftarBulanAktif[0] || "Januari";
+        setEditingItem(null);
+        setFormState({
+          bulan: defaultBln,
+          kodeRekening: "",
+          uraian: "",
+          penjelasan: "",
+          volume: 1,
+          satuan: "Paket",
+          tarifHarga: 0
+        });
+        setIsRekeningModalOpen(true);
+      };
+
+      const handleEditRekening = (item) => {
+        setEditingItem(item);
+        setFormState({
+          bulan: item.bulan || activeMonth,
+          kodeRekening: item.kodeRekening || "",
+          uraian: item.uraian || "",
+          penjelasan: item.penjelasan || "",
+          volume: item.volume || 1,
+          satuan: item.satuan || "Paket",
+          tarifHarga: item.tarifHarga || 0
+        });
+        setIsRekeningModalOpen(true);
+      };
+
+      const handleDeleteRekening = (id, kode) => {
+        setItems(prev => prev.filter(it => it.id !== id));
+        tampilkanToast(`Rekening ${kode || ''} berhasil dihapus.`, "peringatan", "Rekening Dihapus");
+      };
+
+      const handleDeleteBulan = (bulan) => {
+        // Hapus bulan dari daftar bulan terpilih
+        const updatedSelected = selectedMonths.filter(b => b !== bulan);
+        setSelectedMonths(updatedSelected);
+
+        // Hapus rekening yang terikat pada bulan tersebut di tahun anggaran aktif
+        setItems(prev => prev.filter(it => !(it.bulan === bulan && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)))));
+
+        // Jika bulan yang dihapus sedang dibuka, alihkan ke bulan lain yang tersisa atau kosongkan
+        if (activeMonth === bulan) {
+          const sisaBulan = DAFTAR_BULAN.filter(b => updatedSelected.includes(b) && b !== bulan);
+          setActiveMonth(sisaBulan.length > 0 ? sisaBulan[0] : "");
+        }
+
+        tampilkanToast(`Tabel realisasi bulan ${bulan} berhasil dihapus dari panel.`, "peringatan", "Bulan Dihapus");
+      };
+
+      const handleSaveRekening = (e) => {
+        e.preventDefault();
+        const volume = parseFloat(formState.volume) || 1;
+        const tarif = parseFloat(formState.tarifHarga) || 0;
+        const jumlah = volume * tarif;
+
+        if (editingItem) {
+          setItems(prev => prev.map(it => {
+            if (it.id === editingItem.id) {
+              return {
+                ...it,
+                bulan: formState.bulan,
+                kodeRekening: formState.kodeRekening.trim(),
+                uraian: formState.uraian.trim(),
+                penjelasan: formState.penjelasan.trim(),
+                volume,
+                satuan: formState.satuan.trim(),
+                tarifHarga: tarif,
+                jumlah
+              };
+            }
+            return it;
+          }));
+          tampilkanToast("Rincian rekening anggaran diperbarui.", "sukses", "Data Disimpan");
+        } else {
+          const newItem = {
+            id: "bosp_" + Date.now(),
+            tahun: tahunAnggaran,
+            bulan: formState.bulan,
+            kodeRekening: formState.kodeRekening.trim(),
+            uraian: formState.uraian.trim(),
+            penjelasan: formState.penjelasan.trim(),
+            volume,
+            satuan: formState.satuan.trim(),
+            tarifHarga: tarif,
+            jumlah,
+            tanggalRealisasi: "",
+            bnuBpu: "",
+            realisasiBelanja: 0,
+            namaToko: ""
+          };
+          setItems(prev => [...prev, newItem]);
+          setActiveMonth(formState.bulan);
+          setSelectedMonths(prev => prev.includes(formState.bulan) ? prev : [...prev, formState.bulan]);
+          tampilkanToast(`Rekening baru ditambahkan ke bulan ${formState.bulan}.`, "sukses", "Berhasil");
+        }
+        setIsRekeningModalOpen(false);
+      };
+
+      const handleDownloadExcel = (namaBulan) => {
+        const dataBulan = items.filter(it => it.bulan === namaBulan && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)));
+        const headers = [
+          "No. Urut", "Kode Rekening", "Uraian", "Penjelasan Uraian", "Volume",
+          "Satuan", "Tarif Harga (Rp)", "Jumlah (Rp)", "Tanggal Realisasi",
+          "BNU / BPU", "Realisasi Belanja (Rp)", "Selisih (Rp)", "Nama Toko SIPLah", "Keterangan SPJ"
+        ];
+
+        const rows = [headers];
+        if (dataBulan.length > 0) {
+          dataBulan.forEach((it, idx) => {
+            const j = Number(it.jumlah) || 0;
+            const r = Number(it.realisasiBelanja) || 0;
+            rows.push([
+              idx + 1,
+              it.kodeRekening || "",
+              it.uraian || "",
+              it.penjelasan || "",
+              it.volume || 1,
+              it.satuan || "",
+              it.tarifHarga || 0,
+              j,
+              it.tanggalRealisasi || "",
+              it.bnuBpu || "",
+              r,
+              j - r,
+              it.namaToko || "",
+              cekKelengkapanSpj(it) ? "Terealisasi Lengkap (SPJ Siap)" : "Belum Lengkap"
+            ]);
+          });
+        } else {
+          rows.push([
+            1, "5.1.02.01.01.0024", "Belanja Alat Tulis Kantor (ATK)", "Kertas HVS A4",
+            5, "Rim", 55000, 275000, "2026-01-15", "BNU-001/BOSP", 275000, 0,
+            "CV Edu Mitra SIPLah", "Terealisasi Lengkap (SPJ Siap)"
+          ]);
+        }
+
+        const fileName = `Realisasi_BOSP_SDN137_${namaBulan}_${tahunAnggaran}.xlsx`;
+
+        try {
+          if (window.XLSX) {
+            const wb = window.XLSX.utils.book_new();
+            const ws = window.XLSX.utils.aoa_to_sheet(rows);
+            ws['!cols'] = [
+              { wch: 8 }, { wch: 22 }, { wch: 30 }, { wch: 35 }, { wch: 10 },
+              { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 20 },
+              { wch: 20 }, { wch: 16 }, { wch: 28 }, { wch: 28 }
+            ];
+            window.XLSX.utils.book_append_sheet(wb, ws, `Realisasi ${namaBulan}`);
+            window.XLSX.writeFile(wb, fileName);
+            tampilkanToast(`Berkas Excel ${fileName} berhasil diunduh.`, "sukses", "Download Berhasil");
+          } else {
+            tampilkanToast("Pustaka SheetJS sedang disiapkan, silakan coba lagi.", "info");
+          }
+        } catch (e) {
+          console.error(e);
+          tampilkanToast("Gagal mengunduh lembar Excel.", "peringatan");
+        }
+      };
+
+      const handleDownloadAllMonthsExcel = () => {
+        try {
+          if (!window.XLSX) {
+            tampilkanToast("Pustaka Excel belum siap. Silakan tunggu sebentar.", "peringatan");
+            return;
+          }
+          const wb = window.XLSX.utils.book_new();
+          const headers = [
+            "No. Urut", "Kode Rekening", "Uraian", "Penjelasan Uraian", "Volume",
+            "Satuan", "Tarif Harga (Rp)", "Jumlah (Rp)", "Tanggal Realisasi",
+            "BNU / BPU", "Realisasi Belanja (Rp)", "Selisih (Rp)", "Nama Toko SIPLah", "Keterangan SPJ"
+          ];
+
+          DAFTAR_BULAN.forEach(bln => {
+            const blnRows = [headers];
+            const dataBulan = items.filter(it => it.bulan === bln && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)));
+            dataBulan.forEach((it, idx) => {
+              const j = Number(it.jumlah) || 0;
+              const r = Number(it.realisasiBelanja) || 0;
+              blnRows.push([
+                idx + 1,
+                it.kodeRekening || "",
+                it.uraian || "",
+                it.penjelasan || "",
+                it.volume || 1,
+                it.satuan || "",
+                it.tarifHarga || 0,
+                j,
+                it.tanggalRealisasi || "",
+                it.bnuBpu || "",
+                r,
+                j - r,
+                it.namaToko || "",
+                cekKelengkapanSpj(it) ? "Terealisasi Lengkap (SPJ Siap)" : "Belum Lengkap"
+              ]);
+            });
+            const ws = window.XLSX.utils.aoa_to_sheet(blnRows);
+            window.XLSX.utils.book_append_sheet(wb, ws, bln.substring(0, 10));
+          });
+
+          window.XLSX.writeFile(wb, `Buku_Besar_Realisasi_BOSP_SDN137_${tahunAnggaran}.xlsx`);
+          tampilkanToast("Buku Besar 12 Bulan berhasil diexport.", "sukses", "Export Tahunan Selesai");
+        } catch (err) {
+          console.error(err);
+          tampilkanToast("Kendala saat mengekspor 12 bulan.", "peringatan");
+        }
+      };
+
+      const handleTriggerUpload = (namaBulan) => {
+        setTargetUploadMonth(namaBulan);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+          fileInputRef.current.click();
+        }
+      };
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            if (!window.XLSX) throw new Error("Pustaka SheetJS belum siap.");
+            const data = new Uint8Array(evt.target.result);
+            const workbook = window.XLSX.read(data, { type: 'array' });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+            if (!rows || rows.length < 2) {
+              tampilkanToast("Berkas Excel tidak memiliki baris data yang valid.", "peringatan");
+              return;
+            }
+
+            const newItems = [];
+            for (let i = 1; i < rows.length; i++) {
+              const r = rows[i];
+              if (!r || (!r[1] && !r[2])) continue;
+
+              const volume = parseFloat(r[4]) || 1;
+              const tarif = parseFloat(r[6]) || 0;
+              const jumlah = (volume * tarif) > 0 ? (volume * tarif) : (parseFloat(r[7]) || 0);
+
+              let tanggal = String(r[8] || "").trim();
+              if (typeof r[8] === 'number') {
+                const dateObj = new Date(Math.round((r[8] - 25569) * 86400 * 1000));
+                tanggal = dateObj.toISOString().split('T')[0];
+              }
+
+              newItems.push({
+                id: `bosp_up_${Date.now()}_${i}`,
+                tahun: tahunAnggaran,
+                bulan: targetUploadMonth,
+                kodeRekening: String(r[1] || "").trim(),
+                uraian: String(r[2] || "").trim(),
+                penjelasan: String(r[3] || "").trim(),
+                volume,
+                satuan: String(r[5] || "Paket").trim(),
+                tarifHarga: tarif,
+                jumlah,
+                tanggalRealisasi: tanggal,
+                bnuBpu: String(r[9] || "").trim(),
+                realisasiBelanja: parseFloat(r[10]) || 0,
+                namaToko: String(r[12] || "").trim()
+              });
+            }
+
+            if (newItems.length > 0) {
+              setItems(prev => [...prev, ...newItems]);
+              setActiveMonth(targetUploadMonth);
+              setSelectedMonths(prev => prev.includes(targetUploadMonth) ? prev : [...prev, targetUploadMonth]);
+              setIsMonthModalOpen(false);
+              tampilkanToast(`${newItems.length} rekening berhasil diimpor ke bulan ${targetUploadMonth}.`, "sukses", "Impor Berhasil");
+            }
+          } catch (err) {
+            console.error(err);
+            tampilkanToast("Gagal membaca berkas Excel. Pastikan format kolom sesuai standar.", "peringatan");
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const handleExportBackupJson = () => {
+        const payload = {
+          version: 3,
+          tahunAnggaran,
+          selectedMonths,
+          updatedAt: new Date().toISOString(),
+          items
+        };
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
+        const downloadAnchor = document.createElement("a");
+        downloadAnchor.setAttribute("href", dataStr);
+        downloadAnchor.setAttribute("download", `Backup_BOSP_SDN137_${tahunAnggaran}_${new Date().toISOString().slice(0, 10)}.json`);
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        tampilkanToast("Salinan cadangan database lokal berhasil diunduh.", "sukses", "Backup Selesai");
+      };
+
+      const handleImportBackupJson = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const parsed = JSON.parse(evt.target.result);
+            if (parsed && Array.isArray(parsed.items)) {
+              setItems(parsed.items);
+              if (parsed.tahunAnggaran) setTahunAnggaran(Number(parsed.tahunAnggaran));
+              if (parsed.selectedMonths && Array.isArray(parsed.selectedMonths)) setSelectedMonths(parsed.selectedMonths);
+              tampilkanToast("Data cadangan berhasil dipulihkan ke sistem.", "sukses", "Pemulihan Berhasil");
+            } else if (Array.isArray(parsed)) {
+              setItems(parsed);
+              tampilkanToast("Data rekaman berhasil dipulihkan.", "sukses", "Pemulihan Berhasil");
+            } else {
+              tampilkanToast("Format berkas JSON cadangan tidak valid.", "peringatan");
+            }
+          } catch (err) {
+            console.error(err);
+            tampilkanToast("Gagal mengurai berkas JSON cadangan.", "peringatan");
+          }
+        };
+        reader.readAsText(file);
+      };
+
+      const handleResetData = () => {
+        setItems([]);
+        setSelectedMonths([]);
+        setActiveMonth("");
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(STORAGE_SELECTED_MONTHS_KEY);
+          localStorage.removeItem("sdn137_bosp_last_saved");
+        } catch (e) {}
+        setLastSaved("");
+        setIsResetConfirmOpen(false);
+        setResetStep(1);
+        tampilkanToast("Seluruh data dan panel bulan telah dikosongkan ke setelan default awal.", "info", "Reset Selesai");
+      };
+
+      return (
+        <div className="min-h-screen bg-[#041012] text-[#F3FEFF] font-sans antialiased p-3 sm:p-5 lg:p-7">
+          <div className="max-w-[1720px] mx-auto space-y-6">
+
+            {/* Header Identitas SDN 137 Cijerokaso */}
+            <header className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 sm:p-5 shadow-2xl backdrop-blur flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-[#041012] border border-[#06B6D4]/40 flex items-center justify-center text-[#06B6D4] shadow-inner shadow-[#06B6D4]/20 flex-shrink-0">
+                  <svg className="w-7 h-7 sm:w-8 sm:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                  </svg>
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-[#06B6D4]/15 text-[#06B6D4] border border-[#06B6D4]/30 tracking-wide uppercase">
+                      Sistem Penatausahaan Keuangan
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-semibold bg-[#A3E635]/15 text-[#A3E635] border border-[#A3E635]/30">
+                      BOSP Reguler Kemendikbudristek
+                    </span>
+                  </div>
+                  <h1 className="text-xl sm:text-2xl font-black tracking-tight text-[#F3FEFF] mt-1">
+                    REALISASI BOSP SDN 137 CIJEROKASO
+                  </h1>
+                  <p className="text-xs text-[#A2BBC0]">
+                    Pencatatan Rincian Anggaran Belanja, Bukti Kas Pengeluaran (BNU/BPU), Rekonsiliasi SIPLah & Monitoring SPJ
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto bg-[#041012] p-2 sm:p-2.5 rounded-xl border border-[#06B6D4]/25">
+                <label className="text-xs font-semibold text-[#A2BBC0] uppercase tracking-wider flex items-center gap-1.5 pl-1">
+                  <svg className="w-4 h-4 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                  </svg>
+                  Tahun:
+                </label>
+                <input
+                  type="number"
+                  value={tahunAnggaran}
+                  min="2020"
+                  max="2035"
+                  onChange={(e) => setTahunAnggaran(Number(e.target.value) || 2026)}
+                  className="w-24 bg-[#10282C] border border-[#06B6D4]/40 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-sm font-bold text-[#A3E635] text-center focus:outline-none transition"
+                />
+
+                <button
+                  onClick={handleSimpanProgres}
+                  title="Klik untuk menyimpan seluruh progres data pembukuan ke memori lokal browser"
+                  className="px-3.5 py-1.5 rounded-lg bg-[#A3E635] hover:bg-[#bef264] text-[#041012] text-xs font-black shadow-lg shadow-[#A3E635]/25 transition flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V8l-4-4H8zm0 0v4h8V4M6 20h12v-8H6v8z"></path>
+                  </svg>
+                  <span>Simpan Progres Seluruh Data</span>
+                  {lastSaved && (
+                    <span className="ml-1 text-[10px] font-mono bg-[#041012]/25 px-1.5 py-0.5 rounded font-bold">
+                      {lastSaved}
+                    </span>
+                  )}
+                </button>
+                
+                <button
+                  onClick={handleExportBackupJson}
+                  title="Cadangkan seluruh data pembukuan ke JSON"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#06B6D4]/10 hover:bg-[#06B6D4]/20 text-[#06B6D4] text-xs font-semibold border border-[#06B6D4]/30 transition flex items-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path>
+                  </svg>
+                  Backup
+                </button>
+
+                <button
+                  onClick={() => jsonImportRef.current?.click()}
+                  title="Pulihkan data pembukuan dari berkas JSON"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#10282C] hover:bg-[#17363C] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition flex items-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                  </svg>
+                  Restore
+                </button>
+
+                <button
+                  onClick={() => {
+                    setResetStep(1);
+                    setIsResetConfirmOpen(true);
+                  }}
+                  title="Kembalikan data ke awal (Default Data)"
+                  className="px-2.5 py-1.5 rounded-lg bg-[#F43F5E]/10 hover:bg-[#F43F5E]/20 text-[#F43F5E] text-xs font-semibold border border-[#F43F5E]/25 transition"
+                >
+                  Reset
+                </button>
+              </div>
+            </header>
+
+            {}
+            <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 relative overflow-hidden shadow-lg">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#A2BBC0]">Total Alokasi Rencana</p>
+                    <h3 className="text-xl font-bold text-[#F3FEFF] mt-1">{formatRupiah(stats.totalAlokasi)}</h3>
+                    <p className="text-[11px] text-[#A2BBC0] mt-1">{stats.countTotal} total rekening anggaran TA {tahunAnggaran}</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#06B6D4]/15 text-[#06B6D4] flex items-center justify-center border border-[#06B6D4]/30">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 w-full bg-[#041012] h-1.5 rounded-full overflow-hidden">
+                  <div className="bg-[#06B6D4] h-full w-full"></div>
+                </div>
+              </div>
+
+              <div className="bg-[#10282C] border border-[#A3E635]/30 rounded-2xl p-4 relative overflow-hidden shadow-lg">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#A3E635]">Total Realisasi Belanja</p>
+                    <h3 className="text-xl font-extrabold text-[#A3E635] mt-1">{formatRupiah(stats.totalRealisasi)}</h3>
+                    <p className="text-[11px] text-[#A2BBC0] mt-1">Terserap {stats.persenRealisasi}% dari alokasi kas</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#A3E635]/15 text-[#A3E635] flex items-center justify-center border border-[#A3E635]/30">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 w-full bg-[#041012] h-1.5 rounded-full overflow-hidden">
+                  <div className="bg-[#A3E635] h-full transition-all duration-500" style={{ width: `${stats.persenRealisasi}%` }}></div>
+                </div>
+              </div>
+
+              <div className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 relative overflow-hidden shadow-lg">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#A2BBC0]">Total Sisa / Selisih</p>
+                    <h3 className="text-xl font-bold text-[#06B6D4] mt-1">{formatRupiah(stats.totalSelisih)}</h3>
+                    <p className="text-[11px] text-[#A2BBC0] mt-1">Alokasi Rencana – Realisasi Riil</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#06B6D4]/15 text-[#06B6D4] flex items-center justify-center border border-[#06B6D4]/30">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 text-[11px] flex items-center gap-1 font-medium">
+                  <span className="text-[#A2BBC0]">Status:</span>
+                  <span className={`font-bold ${stats.totalSelisih > 0 ? 'text-[#06B6D4]' : (stats.totalSelisih < 0 ? 'text-[#F43F5E]' : 'text-[#A3E635]')}`}>
+                    {stats.totalSelisih > 0 ? 'Sisa Anggaran Tersedia' : (stats.totalSelisih < 0 ? 'Defisit Realisasi' : 'Tepat Seimbang')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 relative overflow-hidden shadow-lg">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#A2BBC0]">Kesiapan Dokumen SPJ</p>
+                    <h3 className="text-xl font-bold text-[#F3FEFF] mt-1">{stats.persenSpj}%</h3>
+                    <p className="text-[11px] text-[#A2BBC0] mt-1">{stats.lengkapCount} dari {stats.countTotal} Rekening Lengkap</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-[#06B6D4]/15 text-[#06B6D4] flex items-center justify-center border border-[#06B6D4]/30">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                  </div>
+                </div>
+                <div className="mt-3 text-[11px] flex items-center justify-between">
+                  <span className="text-[#A2BBC0]">Belum Lengkap:</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F43F5E]/20 text-[#F43F5E] border border-[#F43F5E]/40">
+                    {stats.countBelum} Rekening
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            {}
+            {/* Bilah Navigasi: Menampilkan SEMUA bulan yang sudah dipilih/dibuat */}
+            <section className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full xl:w-auto">
+                <span className="text-xs uppercase font-semibold text-[#A2BBC0] tracking-wider whitespace-nowrap flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                  </svg>
+                  Tabel Realisasi Bulan:
+                </span>
+
+                {/* Tombol Tab Cepat Seluruh Bulan yang Telah Dipilih / Dibuat */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {daftarBulanAktif.length === 0 ? (
+                    <span className="text-xs text-[#A2BBC0] italic bg-[#041012] px-3 py-1.5 rounded-xl border border-[#06B6D4]/15">
+                      Belum ada bulan dibuat. Silakan klik tombol "Tabel Realisasi Baru".
+                    </span>
+                  ) : (
+                    daftarBulanAktif.map((bln) => {
+                      const isActive = bln === activeMonth;
+                      const totalItem = itemsTahun.filter(it => it.bulan === bln).length;
+                      return (
+                        <div
+                          key={bln}
+                          className={`inline-flex items-center rounded-xl transition-all ${
+                            isActive
+                              ? 'bg-[#06B6D4] text-[#041012] shadow-md shadow-[#06B6D4]/25 ring-2 ring-[#06B6D4]'
+                              : 'bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] hover:bg-[#17363C] border border-[#06B6D4]/25'
+                          }`}
+                        >
+                          <button
+                            onClick={() => setActiveMonth(bln)}
+                            className="px-3 py-1.5 text-xs font-bold flex items-center gap-2"
+                          >
+                            <span>{bln}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
+                                isActive
+                                  ? 'bg-[#041012]/30 text-[#041012] font-black'
+                                  : 'bg-[#10282C] text-[#A3E635] border border-[#06B6D4]/20'
+                              }`}
+                            >
+                              {totalItem} Rek
+                            </span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteBulan(bln);
+                            }}
+                            title={`Hapus tabel realisasi bulan ${bln}`}
+                            className={`pr-2.5 pl-1 py-1.5 transition text-xs font-bold hover:scale-110 ${
+                              isActive
+                                ? 'text-[#041012]/70 hover:text-[#F43F5E]'
+                                : 'text-[#A2BBC0]/60 hover:text-[#F43F5E]'
+                            }`}
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto justify-start xl:justify-end">
+                <button
+                  onClick={() => setIsMonthModalOpen(true)}
+                  className="px-3.5 py-2 rounded-xl bg-[#06B6D4] text-[#041012] font-bold text-xs hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v3m0 0v3m0-3h3m-3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                  Tabel Realisasi Baru
+                </button>
+
+                <button
+                  onClick={handleOpenNewRekening}
+                  className="px-3 py-2 rounded-xl bg-[#06B6D4]/15 hover:bg-[#06B6D4]/25 text-[#06B6D4] font-semibold text-xs border border-[#06B6D4]/30 transition flex items-center gap-1.5"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path>
+                  </svg>
+                  Tambah Rekening
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (!activeMonth) {
+                      tampilkanToast("Pilih atau buka tabel bulan terlebih dahulu.", "peringatan");
+                      return;
+                    }
+                    handleDownloadExcel(activeMonth);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-[#A3E635]/15 hover:bg-[#A3E635]/25 text-[#A3E635] font-semibold text-xs border border-[#A3E635]/40 transition flex items-center gap-1.5"
+                  title="Download Excel Bulan Ini"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                  </svg>
+                  Excel ({activeMonth || "Bulan"})
+                </button>
+
+                <button
+                  onClick={handleDownloadAllMonthsExcel}
+                  className="px-3 py-2 rounded-xl bg-[#10282C] hover:bg-[#17363C] text-[#F3FEFF] font-semibold text-xs border border-[#06B6D4]/30 transition flex items-center gap-1.5"
+                  title="Download Buku Besar 12 Bulan (.xlsx)"
+                >
+                  <svg className="w-4 h-4 text-[#A3E635]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                  </svg>
+                  Buku Besar 12 Bln
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (!activeMonth) {
+                      tampilkanToast("Pilih atau buka tabel bulan terlebih dahulu sebelum mengunggah.", "peringatan");
+                      setIsMonthModalOpen(true);
+                      return;
+                    }
+                    handleTriggerUpload(activeMonth);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-[#041012] hover:bg-[#17363C] text-[#F3FEFF] font-semibold text-xs border border-[#06B6D4]/30 transition flex items-center gap-1.5"
+                  title="Upload file Excel ke bulan ini"
+                >
+                  <svg className="w-4 h-4 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                  </svg>
+                  Upload Excel
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (!activeMonth) {
+                      tampilkanToast("Pilih atau buka tabel bulan terlebih dahulu untuk dicetak.", "peringatan");
+                      return;
+                    }
+                    window.print();
+                  }}
+                  className="px-3 py-2 rounded-xl bg-[#041012] hover:bg-[#17363C] text-[#A2BBC0] hover:text-[#F3FEFF] font-semibold text-xs border border-[#06B6D4]/30 transition flex items-center gap-1.5"
+                  title="Cetak format fisik lembar SPJ"
+                >
+                  <svg className="w-4 h-4 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                  </svg>
+                  Cetak SPJ
+                </button>
+              </div>
+            </section>
+
+            {/* TABEL UTAMA REALISASI */}
+            <main className="bg-[#10282C] border border-[#06B6D4]/25 rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-[#06B6D4]/15">
+                <div>
+                  <h2 className="text-base font-bold text-[#F3FEFF] flex items-center gap-2">
+                    <span>Tabel Realisasi Belanja BOSP</span>
+                    <span className="text-xs px-2.5 py-0.5 rounded-md bg-[#041012] text-[#A3E635] font-mono border border-[#A3E635]/30">
+                      Bulan: {activeMonth || "Belum Dipilih"} | TA: {tahunAnggaran}
+                    </span>
+                  </h2>
+                  <p className="text-xs text-[#A2BBC0] mt-0.5">
+                    Pengisian <span className="text-[#06B6D4] font-semibold">TGL REALISASI (Kalender), BNU/BPU, Realisasi Belanja,</span> dan <span className="text-[#06B6D4] font-semibold">Nama Toko SIPLah</span> langsung diketik pada baris tabel di bawah.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Cari uraian, rekening, toko..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-1.5 pl-8 text-xs text-[#F3FEFF] placeholder-[#A2BBC0]/60 focus:outline-none w-56 transition"
+                    />
+                    <svg className="w-3.5 h-3.5 text-[#A2BBC0] absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                    {searchTerm && (
+                      <button onClick={() => setSearchTerm("")} className="absolute right-2.5 top-2 text-[#A2BBC0] hover:text-[#F3FEFF]">
+                        ×
+                      </button>
+                    )}
+                  </div>
+
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                  >
+                    <option value="all">Semua Status SPJ</option>
+                    <option value="lengkap">Terealisasi Lengkap</option>
+                    <option value="belum">Belum Lengkap</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-[#06B6D4]/20 shadow-inner">
+                <table className="w-full text-left text-xs border-collapse min-w-[1460px]">
+                  <thead>
+                    <tr className="bg-[#041012] text-[#A2BBC0] uppercase text-[10px] font-bold tracking-wider border-b border-[#06B6D4]/25">
+                      <th className="p-3 text-center w-12">No. Urut</th>
+                      <th className="p-3 w-36">Kode Rekening</th>
+                      <th className="p-3 w-48">Uraian Belanja</th>
+                      <th className="p-3 w-56">Penjelasan Uraian</th>
+                      <th className="p-3 text-center w-52 bg-[#10282C]/50">
+                        Rincian Perhitungan
+                        <div className="grid grid-cols-3 gap-1 text-[9px] font-normal text-[#A2BBC0] mt-1 border-t border-[#06B6D4]/15 pt-1">
+                          <span>Volume</span>
+                          <span>Satuan</span>
+                          <span>Tarif Satuan</span>
+                        </div>
+                      </th>
+                      <th className="p-3 text-right w-32">Alokasi (Rp)</th>
+                      <th className="p-3 text-center w-40 bg-[#06B6D4]/10 border-x border-[#06B6D4]/25">
+                        <span className="text-[#06B6D4] font-bold flex items-center justify-center gap-1">
+                          <svg className="w-3.5 h-3.5 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                          </svg>
+                          Tanggal Realisasi
+                        </span>
+                        <span className="block text-[9px] font-normal text-[#A3E635]">(Pilih Kalender)</span>
+                      </th>
+                      <th className="p-3 w-36 bg-[#06B6D4]/10 border-r border-[#06B6D4]/25">
+                        <span className="text-[#06B6D4] font-bold">BNU / BPU</span>
+                        <span className="block text-[9px] font-normal text-[#A2BBC0]">(Input Nomor Kas)</span>
+                      </th>
+                      <th className="p-3 text-right w-40 bg-[#06B6D4]/10 border-r border-[#06B6D4]/25">
+                        <span className="text-[#A3E635] font-bold">Realisasi Belanja (Rp)</span>
+                        <span className="block text-[9px] font-normal text-[#A2BBC0]">(Kas Keluar Riil)</span>
+                      </th>
+                      <th className="p-3 text-right w-32">Selisih</th>
+                      <th className="p-3 w-48 bg-[#06B6D4]/10 border-x border-[#06B6D4]/25">
+                        <span className="text-[#06B6D4] font-bold">Nama Toko SIPLah</span>
+                        <span className="block text-[9px] font-normal text-[#A2BBC0]">(Penyedia Rekanan)</span>
+                      </th>
+                      <th className="p-3 w-52">Keterangan (Status SPJ)</th>
+                      <th className="p-3 text-center w-20">Aksi</th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-[#17363C]">
+                    {!activeMonth ? (
+                      <tr>
+                        <td colSpan="13" className="text-center py-16 text-[#A2BBC0]">
+                          <div className="max-w-md mx-auto space-y-3">
+                            <div className="w-12 h-12 mx-auto rounded-2xl bg-[#041012] border border-[#06B6D4]/30 flex items-center justify-center text-[#06B6D4]">
+                              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                              </svg>
+                            </div>
+                            <p className="font-bold text-sm text-[#F3FEFF]">Belum Ada Tabel Realisasi Bulan Yang Dibuat</p>
+                            <p className="text-xs text-[#A2BBC0] leading-relaxed">
+                              Sistem dalam keadaan bersih. Silakan klik tombol <strong>"Tabel Realisasi Baru"</strong> untuk memilih bulan anggaran atau mengunggah data Excel.
+                            </p>
+                            <button
+                              onClick={() => setIsMonthModalOpen(true)}
+                              className="px-4 py-2 rounded-xl bg-[#06B6D4] text-[#041012] font-bold text-xs hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25 inline-flex items-center gap-1.5 mt-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v3m0 0v3m0-3h3m-3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                              </svg>
+                              Buat Tabel Realisasi Baru
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : filteredItemsBulan.length === 0 ? (
+                      <tr>
+                        <td colSpan="13" className="text-center py-14 text-[#A2BBC0]">
+                          <div className="max-w-md mx-auto space-y-2">
+                            <div className="w-10 h-10 mx-auto rounded-full bg-[#041012] border border-[#06B6D4]/30 flex items-center justify-center text-[#06B6D4]">
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+                              </svg>
+                            </div>
+                            <p className="font-semibold text-sm text-[#F3FEFF]">Tidak ada rekening belanja yang ditemukan.</p>
+                            <p className="text-xs text-[#A2BBC0]">
+                              {searchTerm || statusFilter !== "all" 
+                                ? "Coba atur ulang kata kunci pencarian atau filter status." 
+                                : `Bulan ${activeMonth} belum memiliki rekening. Klik tombol "+ Tambah Rekening" untuk memasukkan data.`}
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredItemsBulan.map((item, index) => {
+                        const j = Number(item.jumlah) || 0;
+                        const r = Number(item.realisasiBelanja) || 0;
+                        const selisih = j - r;
+                        const isLengkap = cekKelengkapanSpj(item);
+
+                        return (
+                          <tr key={item.id} className="hover:bg-[#17363C]/60 transition group border-b border-[#06B6D4]/10">
+                            <td className="p-3 text-center font-bold text-[#A2BBC0]">{index + 1}</td>
+                            <td className="p-3 font-mono font-bold text-[#06B6D4]">{item.kodeRekening || '-'}</td>
+                            <td className="p-3 font-semibold text-[#F3FEFF]">{item.uraian || '-'}</td>
+                            <td className="p-3 text-[#A2BBC0] text-[11px] leading-relaxed">{item.penjelasan || '-'}</td>
+                            
+                            <td className="p-3 bg-[#041012]/40 text-center font-mono text-[11px]">
+                              <div className="grid grid-cols-3 gap-1">
+                                <span>{item.volume}</span>
+                                <span className="text-[#A2BBC0]">{item.satuan || ''}</span>
+                                <span className="text-[#F3FEFF]">{formatRupiah(item.tarifHarga)}</span>
+                              </div>
+                            </td>
+
+                            <td className="p-3 text-right font-bold text-[#F3FEFF]">{formatRupiah(j)}</td>
+
+                            {/* 1. TANGGAL REALISASI (KALENDER) */}
+                            <td className="p-2 bg-[#06B6D4]/5 border-x border-[#06B6D4]/20">
+                              <input
+                                type="date"
+                                value={item.tanggalRealisasi || ''}
+                                onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
+                                onChange={(e) => handleInlineUpdate(item.id, 'tanggalRealisasi', e.target.value)}
+                                className="w-full bg-[#041012] border border-[#06B6D4]/40 focus:border-[#06B6D4] rounded-lg px-2 py-1.5 text-xs text-[#F3FEFF] text-center cursor-pointer transition focus:outline-none"
+                                title="Klik untuk memilih tanggal dari kalender"
+                              />
+                            </td>
+
+                            {/* 2. BNU / BPU */}
+                            <td className="p-2 bg-[#06B6D4]/5 border-r border-[#06B6D4]/20">
+                              <input
+                                type="text"
+                                value={item.bnuBpu || ''}
+                                placeholder="Contoh: BNU-01..."
+                                onChange={(e) => handleInlineUpdate(item.id, 'bnuBpu', e.target.value)}
+                                className="w-full bg-[#041012] border border-[#06B6D4]/40 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs font-mono text-[#A2BBC0] focus:text-[#F3FEFF] transition focus:outline-none"
+                              />
+                            </td>
+
+                            {/* 3. REALISASI BELANJA */}
+                            <td className="p-2 bg-[#06B6D4]/5 border-r border-[#06B6D4]/20">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={item.realisasiBelanja !== undefined ? item.realisasiBelanja : 0}
+                                onChange={(e) => handleInlineUpdate(item.id, 'realisasiBelanja', e.target.value)}
+                                className="w-full bg-[#041012] border border-[#A3E635]/40 focus:border-[#A3E635] rounded-lg px-2.5 py-1.5 text-xs font-bold text-[#A3E635] text-right transition focus:outline-none"
+                              />
+                            </td>
+
+                            {/* SELISIH */}
+                            <td className={`p-3 text-right font-bold ${selisih > 0 ? 'text-[#06B6D4]' : (selisih < 0 ? 'text-[#F43F5E]' : 'text-[#A2BBC0]')}`}>
+                              {formatRupiah(selisih)}
+                            </td>
+
+                            {/* 4. NAMA TOKO SIPLAH */}
+                            <td className="p-2 bg-[#06B6D4]/5 border-x border-[#06B6D4]/20">
+                              <input
+                                type="text"
+                                value={item.namaToko || ''}
+                                placeholder="Penyedia SIPLah / Rekanan..."
+                                onChange={(e) => handleInlineUpdate(item.id, 'namaToko', e.target.value)}
+                                className="w-full bg-[#041012] border border-[#06B6D4]/40 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] transition focus:outline-none"
+                              />
+                            </td>
+
+                            {/* KETERANGAN OTOMATIS SPJ */}
+                            <td className="p-3">
+                              {isLengkap ? (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-[#A3E635]/15 text-[#A3E635] border border-[#A3E635]/40">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                                  </svg>
+                                  Terealisasi Lengkap (SPJ Siap)
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-[#F43F5E]/15 text-[#F43F5E] border border-[#F43F5E]/30">
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                  </svg>
+                                  Belum Lengkap
+                                </span>
+                              )}
+                            </td>
+
+                            {/* TOMBOL AKSI */}
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => handleEditRekening(item)}
+                                  className="p-1.5 rounded-lg text-[#06B6D4] hover:bg-[#06B6D4]/15 transition"
+                                  title="Edit Rincian Rekening"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteRekening(item.id, item.kodeRekening)}
+                                  className="p-1.5 rounded-lg text-[#F43F5E] hover:bg-[#F43F5E]/15 transition"
+                                  title="Hapus Rekening"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                  </svg>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+
+                  {/* JUMLAH TOTAL REALISASI DI AKHIR TABEL */}
+                  <tfoot className="bg-[#041012] border-t-2 border-[#06B6D4]/40 font-bold text-xs">
+                    <tr>
+                      <td colSpan="5" className="p-3.5 text-right uppercase tracking-wider text-[#A2BBC0]">
+                        JUMLAH TOTAL REALISASI (<span className="text-[#06B6D4]">{activeMonth || "-"}</span>):
+                      </td>
+                      <td className="p-3.5 text-right text-[#F3FEFF] text-sm">{formatRupiah(tfootBulan.totalJumlah)}</td>
+                      <td colSpan="2" className="p-3.5 bg-[#06B6D4]/5 border-x border-[#06B6D4]/20 text-center text-[#A2BBC0] text-[11px] font-normal">
+                        Total Realisasi Kas Riil:
+                      </td>
+                      <td className="p-3.5 text-right text-[#A3E635] text-sm bg-[#06B6D4]/5 border-r border-[#06B6D4]/20">
+                        {formatRupiah(tfootBulan.totalRealisasi)}
+                      </td>
+                      <td className="p-3.5 text-right text-[#06B6D4] text-sm">
+                        {formatRupiah(tfootBulan.totalSelisih)}
+                      </td>
+                      <td colSpan="3" className="p-3.5 text-[#A2BBC0] text-[11px] font-normal">
+                        Rekapitulasi pembukuan lembar {activeMonth || "kosong"} TA {tahunAnggaran}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </main>
+
+            {}
+            <section className="bg-[#10282C] border border-[#F43F5E]/30 rounded-2xl p-4 sm:p-5 shadow-2xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#F43F5E]/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#F43F5E]/15 text-[#F43F5E] flex items-center justify-center border border-[#F43F5E]/30">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-[#F3FEFF] flex items-center gap-2">
+                      <span>Daftar Rekening Belum Terealisasi / SPJ Belum Lengkap</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#F43F5E]/20 text-[#F43F5E] border border-[#F43F5E]/40">
+                        {pendingItems.length} Rekening
+                      </span>
+                    </h2>
+                    <p className="text-xs text-[#A2BBC0]">
+                      Daftar rekening belanja pada Tahun Anggaran {tahunAnggaran} yang instrumen bukti fisiknya belum terpenuhi.
+                    </p>
+                  </div>
+                </div>
+                <div className="text-xs text-[#A2BBC0]">
+                  Status: <span className="text-[#A3E635] font-medium">Monitoring Real-time</span>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {pendingItems.length === 0 ? (
+                  <div className="col-span-full bg-[#041012] border border-[#A3E635]/30 rounded-xl p-6 text-center">
+                    <div className="w-12 h-12 mx-auto rounded-xl bg-[#A3E635]/15 text-[#A3E635] flex items-center justify-center mb-2 border border-[#A3E635]/30">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                      </svg>
+                    </div>
+                    <h4 className="text-sm font-bold text-[#A3E635]">Semua Rekening Belanja Telah Terealisasi Lengkap!</h4>
+                    <p className="text-xs text-[#A2BBC0] mt-1">Seluruh Tanggal Realisasi, BNU/BPU, Realisasi Belanja, dan SIPLah telah terisi valid.</p>
+                  </div>
+                ) : (
+                  pendingItems.map(item => {
+                    const kekurangan = periksaKekurangan(item);
+                    return (
+                      <div key={item.id} className="bg-[#041012] border border-[#F43F5E]/30 hover:border-[#F43F5E]/60 rounded-xl p-4 transition flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#06B6D4]/15 text-[#06B6D4] border border-[#06B6D4]/30">
+                              {item.kodeRekening || '-'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#10282C] text-[#A3E635] border border-[#06B6D4]/20">
+                              Bulan {item.bulan}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-bold text-[#F3FEFF] mt-2 line-clamp-1" title={item.uraian}>
+                            {item.uraian || '-'}
+                          </h4>
+                          <p className="text-[11px] text-[#A2BBC0] line-clamp-2 mt-1">
+                            {item.penjelasan || 'Belum ada penjelasan spesifik.'}
+                          </p>
+                        </div>
+
+                        <div className="space-y-2 border-t border-[#06B6D4]/10 pt-2">
+                          <div className="flex justify-between items-center text-[11px]">
+                            <span className="text-[#A2BBC0]">Alokasi Anggaran:</span>
+                            <span className="font-bold text-[#F3FEFF]">{formatRupiah(item.jumlah)}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-[#A2BBC0] block mb-1">Instrumen Yang Belum Diisi:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {kekurangan.map((k, i) => (
+                                <span key={i} className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#F43F5E]/15 text-[#F43F5E] border border-[#F43F5E]/30">
+                                  {k}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setActiveMonth(item.bulan);
+                              tampilkanToast(`Berpindah ke lembar ${item.bulan}.`, "info", "Navigasi Bulan");
+                            }}
+                            className="w-full mt-1 px-3 py-1.5 rounded-lg bg-[#F43F5E]/15 hover:bg-[#F43F5E]/25 text-[#F43F5E] text-xs font-semibold border border-[#F43F5E]/30 transition flex items-center justify-center gap-1.5"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            Buka Lembar & Lengkapi
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
+            {}
+            <footer className="text-center py-4 text-xs text-[#A2BBC0] border-t border-[#06B6D4]/10">
+              <p>Sistem Informasi Penatausahaan & Realisasi BOSP — SDN 137 Cijerokaso Kota Bandung</p>
+              <p className="text-[11px] text-[#A2BBC0]/70 mt-1">Identitas Warna Resmi SDNCI: Night Cyan Lime (#041012, #10282C, #06B6D4, #A3E635, #F3FEFF, #F43F5E)</p>
+            </footer>
+
+            {}
+            {isMonthModalOpen && (
+              <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-[#10282C] border border-[#06B6D4]/40 rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+                  <div className="p-5 bg-[#041012] border-b border-[#06B6D4]/20 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-[#06B6D4]/15 text-[#06B6D4] flex items-center justify-center border border-[#06B6D4]/30">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                        </svg>
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-[#F3FEFF]">Pembuatan & Pilihan Tabel Realisasi Baru</h3>
+                        <p className="text-xs text-[#A2BBC0]">Pilih bulan anggaran (Januari – Desember) untuk membuka lembar kerja atau unduh/unggah berkas Excel (.xlsx)</p>
+                      </div>
+                    </div>
+                    <button onClick={() => setIsMonthModalOpen(false)} className="p-2 rounded-xl text-[#A2BBC0] hover:text-[#F3FEFF] hover:bg-[#10282C] transition">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="p-5 overflow-y-auto space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {DAFTAR_BULAN.map(b => {
+                        const blnItems = items.filter(it => it.bulan === b && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)));
+                        const isBlnActive = (b === activeMonth);
+                        let blnRealisasi = 0;
+                        let blnLengkap = 0;
+                        blnItems.forEach(it => {
+                          blnRealisasi += Number(it.realisasiBelanja) || 0;
+                          if (cekKelengkapanSpj(it)) blnLengkap++;
+                        });
+
+                        return (
+                          <div
+                            key={b}
+                            className={`p-4 rounded-xl border transition flex flex-col justify-between space-y-3 ${
+                              isBlnActive
+                                ? 'bg-[#041012] border-[#06B6D4] shadow-lg shadow-[#06B6D4]/20'
+                                : 'bg-[#041012]/80 border-[#06B6D4]/20 hover:border-[#06B6D4]/50'
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-center justify-between">
+                                <span className={`text-sm font-black tracking-wide ${isBlnActive ? 'text-[#06B6D4]' : 'text-[#F3FEFF]'}`}>{b}</span>
+                                {isBlnActive ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#06B6D4] text-[#041012]">Aktif</span>
+                                ) : (
+                                  <span className="text-[10px] text-[#A2BBC0] font-mono">TA {tahunAnggaran}</span>
+                                )}
+                              </div>
+
+                              <div className="mt-2.5 space-y-1 text-xs">
+                                <div className="flex justify-between text-[#A2BBC0]">
+                                  <span>Jumlah Rekening:</span>
+                                  <span className="font-bold text-[#F3FEFF]">{blnItems.length}</span>
+                                </div>
+                                <div className="flex justify-between text-[#A2BBC0]">
+                                  <span>Status SPJ:</span>
+                                  <span className={`font-bold ${blnLengkap === blnItems.length && blnItems.length > 0 ? 'text-[#A3E635]' : 'text-[#A2BBC0]'}`}>
+                                    {blnItems.length > 0 ? `${blnLengkap}/${blnItems.length} Lengkap` : 'Belum Ada'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between text-[#A2BBC0]">
+                                  <span>Realisasi Kas:</span>
+                                  <span className="font-bold text-[#A3E635]">{formatRupiah(blnRealisasi)}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2 border-t border-[#06B6D4]/15 pt-3">
+                              <button
+                                onClick={() => {
+                                  setActiveMonth(b);
+                                  setSelectedMonths(prev => prev.includes(b) ? prev : [...prev, b]);
+                                  setIsMonthModalOpen(false);
+                                  tampilkanToast(`Lembar kerja realisasi beralih ke bulan ${b}.`, "sukses", "Bulan Dipilih");
+                                }}
+                                className={`w-full py-1.5 rounded-lg font-bold text-xs transition ${
+                                  isBlnActive
+                                    ? 'bg-[#06B6D4] text-[#041012]'
+                                    : 'bg-[#10282C] hover:bg-[#17363C] text-[#06B6D4] border border-[#06B6D4]/30'
+                                }`}
+                              >
+                                {isBlnActive ? 'Sedang Dibuka' : 'Buka Lembar Realisasi'}
+                              </button>
+
+                              <div className="grid grid-cols-2 gap-1.5 pt-1">
+                                <button
+                                  onClick={() => handleDownloadExcel(b)}
+                                  className="px-2 py-1.5 rounded-lg bg-[#A3E635]/15 hover:bg-[#A3E635]/25 text-[#A3E635] font-semibold text-[11px] border border-[#A3E635]/30 transition flex items-center justify-center gap-1"
+                                  title={`Download Excel Bulan ${b}`}
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                  </svg>
+                                  Excel
+                                </button>
+                                <button
+                                  onClick={() => handleTriggerUpload(b)}
+                                  className="px-2 py-1.5 rounded-lg bg-[#041012] hover:bg-[#10282C] text-[#F3FEFF] font-semibold text-[11px] border border-[#06B6D4]/30 transition flex items-center justify-center gap-1"
+                                  title={`Upload Excel Bulan ${b}`}
+                                >
+                                  <svg className="w-3.5 h-3.5 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                                  </svg>
+                                  Upload
+                                </button>
+                              </div>
+
+                              {/* Tombol Hapus Bulan pada Kartu Modal */}
+                              {daftarBulanAktif.includes(b) && (
+                                <button
+                                  onClick={() => handleDeleteBulan(b)}
+                                  className="w-full py-1 text-[11px] rounded-lg bg-[#F43F5E]/10 hover:bg-[#F43F5E]/20 text-[#F43F5E] font-semibold border border-[#F43F5E]/25 transition flex items-center justify-center gap-1 mt-1"
+                                  title={`Hapus tabel bulan ${b} dari daftar aktif`}
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                  </svg>
+                                  Hapus Bulan Ini
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-[#041012] border-t border-[#06B6D4]/20 flex justify-between items-center text-xs text-[#A2BBC0]">
+                    <span>Tahun Anggaran Terpilih: <strong className="text-[#A3E635] font-mono">{tahunAnggaran}</strong></span>
+                    <button onClick={() => setIsMonthModalOpen(false)} className="px-5 py-2 rounded-xl bg-[#10282C] hover:bg-[#17363C] text-[#F3FEFF] font-semibold border border-[#06B6D4]/30 transition">
+                      Tutup
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {}
+            {isRekeningModalOpen && (
+              <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-[#10282C] border border-[#06B6D4]/40 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
+                  <div className="p-5 bg-[#041012] border-b border-[#06B6D4]/20 flex items-center justify-between">
+                    <h3 className="text-base font-bold text-[#F3FEFF] flex items-center gap-2">
+                      <svg className="w-5 h-5 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                      </svg>
+                      <span>{editingItem ? 'Edit Rincian Rekening Anggaran' : 'Tambah Rekening Belanja Baru'}</span>
+                    </h3>
+                    <button onClick={() => setIsRekeningModalOpen(false)} className="p-2 rounded-xl text-[#A2BBC0] hover:text-[#F3FEFF] hover:bg-[#10282C] transition">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                      </svg>
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveRekening} className="p-5 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Bulan Alokasi</label>
+                        <select
+                          value={formState.bulan}
+                          onChange={(e) => setFormState({ ...formState, bulan: e.target.value })}
+                          className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs text-[#F3FEFF] focus:outline-none"
+                        >
+                          {DAFTAR_BULAN.map(b => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Kode Rekening</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Contoh: 5.1.02.01.01.0024"
+                          value={formState.kodeRekening}
+                          onChange={(e) => setFormState({ ...formState, kodeRekening: e.target.value })}
+                          className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs font-mono text-[#06B6D4] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Uraian Rekening</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Contoh: Belanja Alat Tulis Kantor (ATK)"
+                        value={formState.uraian}
+                        onChange={(e) => setFormState({ ...formState, uraian: e.target.value })}
+                        className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs text-[#F3FEFF] focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#A2BBC0] mb-1">Penjelasan Uraian</label>
+                      <textarea
+                        rows="2"
+                        placeholder="Rincian peruntukan barang/jasa bagi kebutuhan sekolah SDN 137 Cijerokaso..."
+                        value={formState.penjelasan}
+                        onChange={(e) => setFormState({ ...formState, penjelasan: e.target.value })}
+                        className="w-full bg-[#041012] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-xl px-3 py-2 text-xs text-[#F3FEFF] focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="bg-[#041012] p-3.5 rounded-xl border border-[#06B6D4]/20 space-y-2">
+                      <span className="text-xs font-bold text-[#06B6D4] block">Rincian Perhitungan Volume, Satuan & Tarif</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] text-[#A2BBC0] mb-1">Volume</label>
+                          <input
+                            type="number"
+                            min="1"
+                            step="any"
+                            required
+                            value={formState.volume}
+                            onChange={(e) => setFormState({ ...formState, volume: e.target.value })}
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#A2BBC0] mb-1">Satuan</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Contoh: Rim, Paket, Buah"
+                            value={formState.satuan}
+                            onChange={(e) => setFormState({ ...formState, satuan: e.target.value })}
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#A2BBC0] mb-1">Tarif Satuan (Rp)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            required
+                            value={formState.tarifHarga}
+                            onChange={(e) => setFormState({ ...formState, tarifHarga: e.target.value })}
+                            className="w-full bg-[#10282C] border border-[#06B6D4]/30 focus:border-[#06B6D4] rounded-lg px-2.5 py-1.5 text-xs text-[#F3FEFF] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-[#06B6D4]/10">
+                        <span className="text-xs text-[#A2BBC0]">Total Jumlah Alokasi (Volume × Tarif):</span>
+                        <span className="text-sm font-bold text-[#A3E635]">
+                          {formatRupiah((parseFloat(formState.volume) || 0) * (parseFloat(formState.tarifHarga) || 0))}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsRekeningModalOpen(false)}
+                        className="px-4 py-2 rounded-xl bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2 rounded-xl bg-[#06B6D4] text-[#041012] text-xs font-bold hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25"
+                      >
+                        Simpan Rekening
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Modal Konfirmasi Reset Data Bertahap */}
+            {isResetConfirmOpen && (
+              <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-[#10282C] border border-[#F43F5E]/40 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-[#F43F5E]/15 text-[#F43F5E] flex items-center justify-center border border-[#F43F5E]/30">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-[#F3FEFF]">Konfirmasi Reset Data</h3>
+                      <span className="text-[10px] text-[#A2BBC0] font-semibold uppercase tracking-wider">Tahap {resetStep} dari 2</span>
+                    </div>
+                  </div>
+
+                  {resetStep === 1 ? (
+                    <>
+                      <div className="bg-[#041012] p-3.5 rounded-xl border border-[#F43F5E]/25">
+                        <p className="text-xs text-[#F3FEFF] leading-relaxed font-medium">
+                          Dengan menekan tombol reset, seluruh data akan kembali ke awal dimana seluruh data akan hilang termasuk panel bulan yang telah dibuat.
+                        </p>
+                      </div>
+                      <div className="flex justify-end gap-3 pt-2">
+                        <button
+                          onClick={() => setIsResetConfirmOpen(false)}
+                          className="px-4 py-2 rounded-xl bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          onClick={() => setResetStep(2)}
+                          className="px-4 py-2 rounded-xl bg-[#06B6D4] text-[#041012] text-xs font-bold hover:bg-cyan-300 transition shadow-lg shadow-[#06B6D4]/25 flex items-center gap-1.5"
+                        >
+                          <span>Lanjutkan</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                          </svg>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="bg-[#041012] p-3.5 rounded-xl border border-[#F43F5E]/30 space-y-2">
+                        <p className="text-xs text-[#F43F5E] leading-relaxed font-bold flex items-start gap-1.5">
+                          <svg className="w-4 h-4 text-[#F43F5E] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                          </svg>
+                          <span>Sebelum benar-benar direset sebaiknya lakukan backup.</span>
+                        </p>
+                        <p className="text-[11px] text-[#A2BBC0]">
+                          Apakah Anda ingin mencadangkan berkas JSON terlebih dahulu sebelum seluruh data dikosongkan?
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                        <button
+                          onClick={() => handleExportBackupJson()}
+                          className="px-3.5 py-2 rounded-xl bg-[#06B6D4]/15 hover:bg-[#06B6D4]/25 text-[#06B6D4] text-xs font-bold border border-[#06B6D4]/30 transition flex items-center gap-1.5"
+                          title="Unduh cadangan data sekarang"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path>
+                          </svg>
+                          <span>Backup Sekarang</span>
+                        </button>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setIsResetConfirmOpen(false);
+                              setResetStep(1);
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-[#041012] text-[#A2BBC0] hover:text-[#F3FEFF] text-xs font-semibold border border-[#06B6D4]/20 transition"
+                          >
+                            Batal
+                          </button>
+                          <button
+                            onClick={handleResetData}
+                            className="px-4 py-2 rounded-xl bg-[#F43F5E] text-white text-xs font-bold hover:bg-rose-600 transition shadow-lg shadow-[#F43F5E]/25"
+                          >
+                            Ya, Reset Data
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Hidden Input Files */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".xlsx, .xls"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+            <input
+              type="file"
+              ref={jsonImportRef}
+              accept=".json"
+              className="hidden"
+              onChange={handleImportBackupJson}
+            />
+
+            {}
+            {toast.show && (
+              <div className="fixed bottom-5 right-5 z-50 max-w-md bg-[#10282C] border border-[#06B6D4]/50 rounded-xl p-4 shadow-2xl flex items-start gap-3">
+                <div className={`mt-0.5 ${toast.type === 'sukses' ? 'text-[#A3E635]' : (toast.type === 'peringatan' ? 'text-[#F43F5E]' : 'text-[#06B6D4]')}`}>
+                  {toast.type === 'sukses' ? (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                  )}
+                </div>
+                <div>
+                  <h5 className="text-xs font-bold text-[#F3FEFF]">{toast.title}</h5>
+                  <p className="text-xs text-[#A2BBC0] mt-0.5 leading-relaxed">{toast.message}</p>
+                </div>
+              </div>
+            )}
+
+            {}
+            {/* Format Cetak Fisik SPJ */}
+            <div className="hidden print-container p-6 bg-white text-black font-serif">
+              <div className="text-center border-b-2 border-black pb-4 mb-4">
+                <h2 className="text-xl font-bold uppercase">PEMERINTAH KOTA BANDUNG</h2>
+                <h3 className="text-lg font-bold uppercase">DINAS PENDIDIKAN</h3>
+                <h1 className="text-2xl font-black uppercase">SD NEGERI 137 CIJEROKASO</h1>
+                <p className="text-xs italic">Jl. Cijerokaso No. 137, Sarijadi, Kec. Sukasari, Kota Bandung, Jawa Barat</p>
+                <h4 className="text-sm font-bold mt-2 uppercase underline">
+                  LEMBAR REKONSILIASI & REALISASI BELANJA BOSP — BULAN {activeMonth.toUpperCase()} {tahunAnggaran}
+                </h4>
+              </div>
+
+              <table className="w-full text-xs mb-8">
+                <thead>
+                  <tr className="bg-gray-200">
+                    <th className="p-1">No</th>
+                    <th className="p-1">Kode Rekening</th>
+                    <th className="p-1">Uraian Rekening</th>
+                    <th className="p-1">Vol</th>
+                    <th className="p-1">Satuan</th>
+                    <th className="p-1">Alokasi (Rp)</th>
+                    <th className="p-1">Tgl Realisasi</th>
+                    <th className="p-1">No. BNU/BPU</th>
+                    <th className="p-1">Realisasi (Rp)</th>
+                    <th className="p-1">Selisih (Rp)</th>
+                    <th className="p-1">Toko SIPLah</th>
+                    <th className="p-1">Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsBulan.map((it, idx) => {
+                    const j = Number(it.jumlah) || 0;
+                    const r = Number(it.realisasiBelanja) || 0;
+                    return (
+                      <tr key={it.id}>
+                        <td className="text-center">{idx + 1}</td>
+                        <td className="font-mono">{it.kodeRekening}</td>
+                        <td>{it.uraian}</td>
+                        <td className="text-center">{it.volume}</td>
+                        <td className="text-center">{it.satuan}</td>
+                        <td className="text-right">{formatRupiah(j)}</td>
+                        <td className="text-center">{it.tanggalRealisasi || '-'}</td>
+                        <td className="text-center">{it.bnuBpu || '-'}</td>
+                        <td className="text-right">{formatRupiah(r)}</td>
+                        <td className="text-right">{formatRupiah(j - r)}</td>
+                        <td>{it.namaToko || '-'}</td>
+                        <td className="text-center">{cekKelengkapanSpj(it) ? "LENGKAP" : "BELUM LENGKAP"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="font-bold bg-gray-100">
+                    <td colSpan="5" className="text-right p-2">JUMLAH TOTAL:</td>
+                    <td className="text-right p-2">{formatRupiah(tfootBulan.totalJumlah)}</td>
+                    <td colSpan="2"></td>
+                    <td className="text-right p-2">{formatRupiah(tfootBulan.totalRealisasi)}</td>
+                    <td className="text-right p-2">{formatRupiah(tfootBulan.totalSelisih)}</td>
+                    <td colSpan="2"></td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              <div className="grid grid-cols-2 text-center text-xs mt-12 pt-8">
+                <div>
+                  <p>Mengetahui,</p>
+                  <p className="font-bold">Kepala SDN 137 Cijerokaso</p>
+                  <div className="h-20"></div>
+                  <p className="font-bold underline">_____________________________</p>
+                  <p>NIP. .....................................................</p>
+                </div>
+                <div>
+                  <p>Bandung, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+                  <p className="font-bold">Bendahara BOSP</p>
+                  <div className="h-20"></div>
+                  <p className="font-bold underline">_____________________________</p>
+                  <p>NIP. .....................................................</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
