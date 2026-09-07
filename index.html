@@ -1132,7 +1132,7 @@
                   ) : (
                     daftarBulanAktif.map((bln) => {
                       const isActive = bln === activeMonth;
-                      const totalItem = itemsTahun.filter(it => it.bulan === bln).length;
+                      const totalItem = itemsTahun.filter(it => it.bulan === bln && hasAngkaKodeRekening(it.kodeRekening)).length;
                       return (
                         <div
                           key={bln}
@@ -1830,10 +1830,11 @@
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {DAFTAR_BULAN.map(b => {
                         const blnItems = items.filter(it => it.bulan === b && (!it.tahun || Number(it.tahun) === Number(tahunAnggaran)));
+                        const blnRekeningItems = blnItems.filter(it => hasAngkaKodeRekening(it.kodeRekening));
                         const isBlnActive = (b === activeMonth);
                         let blnRealisasi = 0;
                         let blnLengkap = 0;
-                        blnItems.forEach(it => {
+                        blnRekeningItems.forEach(it => {
                           blnRealisasi += Number(it.realisasiBelanja) || 0;
                           if (cekKelengkapanSpj(it)) blnLengkap++;
                         });
@@ -1860,12 +1861,12 @@
                               <div className="mt-2.5 space-y-1 text-xs">
                                 <div className="flex justify-between text-[#A2BBC0]">
                                   <span>Jumlah Rekening:</span>
-                                  <span className="font-bold text-[#F3FEFF]">{blnItems.length}</span>
+                                  <span className="font-bold text-[#F3FEFF]">{blnRekeningItems.length}</span>
                                 </div>
                                 <div className="flex justify-between text-[#A2BBC0]">
                                   <span>Status SPJ:</span>
-                                  <span className={`font-bold ${blnLengkap === blnItems.length && blnItems.length > 0 ? 'text-[#A3E635]' : 'text-[#A2BBC0]'}`}>
-                                    {blnItems.length > 0 ? `${blnLengkap}/${blnItems.length} Lengkap` : 'Belum Ada'}
+                                  <span className={`font-bold ${blnLengkap === blnRekeningItems.length && blnRekeningItems.length > 0 ? 'text-[#A3E635]' : 'text-[#A2BBC0]'}`}>
+                                    {blnRekeningItems.length > 0 ? `${blnLengkap}/${blnRekeningItems.length} Lengkap` : 'Belum Ada'}
                                   </span>
                                 </div>
                                 <div className="flex justify-between text-[#A2BBC0]">
