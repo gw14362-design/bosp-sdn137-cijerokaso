@@ -152,6 +152,7 @@
 
       const [searchTerm, setSearchTerm] = useState("");
       const [statusFilter, setStatusFilter] = useState("all");
+      const [showGreyRows, setShowGreyRows] = useState(true);
 
       const [items, setItems] = useState(() => {
         try {
@@ -254,6 +255,11 @@
 
       const filteredItemsBulan = useMemo(() => {
         return itemsBulan.filter(item => {
+          const hasKode = hasAngkaKodeRekening(item.kodeRekening);
+          if (!showGreyRows && !hasKode) {
+            return false;
+          }
+
           const cocokSearch =
             searchTerm.trim() === "" ||
             (item.kodeRekening && item.kodeRekening.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -267,7 +273,7 @@
           if (statusFilter === "belum") return cocokSearch && !isLengkap;
           return cocokSearch;
         });
-      }, [itemsBulan, searchTerm, statusFilter]);
+      }, [itemsBulan, searchTerm, statusFilter, showGreyRows]);
 
       const stats = useMemo(() => {
         let totalAlokasi = 0;
@@ -1055,6 +1061,36 @@
                     <option value="lengkap">Terealisasi Lengkap</option>
                     <option value="belum">Belum Lengkap</option>
                   </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGreyRows(prev => {
+                        const nextVal = !prev;
+                        tampilkanToast(
+                          nextVal ? "Baris abu-abu (judul/kategori) ditampilkan." : "Baris abu-abu (judul/kategori) disembunyikan.",
+                          "info",
+                          "Visibilitas Baris Abu-abu"
+                        );
+                        return nextVal;
+                      });
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 cursor-pointer ${
+                      showGreyRows
+                        ? 'bg-[#374151] hover:bg-[#4B5563] text-gray-100 border-gray-500 shadow'
+                        : 'bg-[#041012] hover:bg-[#17363C] text-[#A2BBC0] hover:text-[#F3FEFF] border-[#06B6D4]/30'
+                    }`}
+                    title={showGreyRows ? "Klik untuk menyembunyikan baris abu-abu" : "Klik untuk menampilkan baris abu-abu"}
+                  >
+                    <svg className="w-3.5 h-3.5 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      {showGreyRows ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                      )}
+                    </svg>
+                    <span>{showGreyRows ? "Sembunyikan Baris Abu-abu" : "Tampilkan Baris Abu-abu"}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1174,7 +1210,22 @@
                               <td className="p-3 text-right"></td>
                               <td className="p-2 border-x border-gray-600/40"></td>
                               <td className="p-3"></td>
-                              <td className="p-3 text-center"></td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowGreyRows(false);
+                                    tampilkanToast("Baris abu-abu disembunyikan. Anda dapat menampilkannya kembali lewat tombol di atas tabel.", "info", "Baris Disembunyikan");
+                                  }}
+                                  className="p-1 rounded text-gray-300 hover:text-white hover:bg-gray-700 transition"
+                                  title="Sembunyikan baris abu-abu ini"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
+                                  </svg>
+                                </button>
+                              </td>
                             </tr>
                           );
                         }
