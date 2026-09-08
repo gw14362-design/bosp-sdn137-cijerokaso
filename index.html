@@ -164,6 +164,157 @@
       return kurang;
     }
 
+    /* Helper: Menemukan SATU PAKET Baris Abu-abu (biasanya 1 - 3 baris bertingkat) yang menaungi suatu rekening */
+    function cariPaketHeaderItem(itemList, itemId, bulan) {
+      const targetItem = itemList.find(it => it.id === itemId);
+      if (!targetItem || !hasAngkaKodeRekening(targetItem.kodeRekening)) return [];
+
+      const itemsBulanIni = itemList.filter(it => it.bulan === bulan);
+      const idx = itemsBulanIni.findIndex(it => it.id === itemId);
+
+      if (idx !== -1) {
+        // Telusuri ke atas dari posisi item ini
+        let pointer = idx - 1;
+        // 1. Lewati item-item transaksi yang masih satu rombongan di atasnya
+        while (pointer >= 0 && hasAngkaKodeRekening(itemsBulanIni[pointer].kodeRekening)) {
+          pointer--;
+        }
+
+        // 2. Kumpulkan seluruh baris abu-abu berurutan yang menaunginya (satu paket 1-3 baris)
+        const paketDitemukan = [];
+        while (pointer >= 0 && !hasAngkaKodeRekening(itemsBulanIni[pointer].kodeRekening)) {
+          paketDitemukan.unshift(itemsBulanIni[pointer]); // masukkan ke depan agar urutan hierarki tetap benar
+          pointer--;
+        }
+
+        if (paketDitemukan.length > 0) {
+          return paketDitemukan;
+        }
+      }
+
+      // Fallback jika item menyimpan data paketHeader tersimpan
+      if (Array.isArray(targetItem.paketHeader) && targetItem.paketHeader.length > 0) {
+        return targetItem.paketHeader.map((h, i) => ({
+          id: `hdr_saved_${i}_${targetItem.id}`,
+          tahun: targetItem.tahun,
+          bulan: bulan,
+          kodeRekening: h.kodeRekening || "",
+          uraian: h.uraian || "",
+          penjelasan: h.penjelasan || "",
+          volume: 0,
+          satuan: "",
+          tarifHarga: 0,
+          jumlah: 0,
+          realisasiBelanja: 0
+        }));
+      }
+
+      return [];
+    }
+
+    /* Helper: Sinkronisasi perpindahan item transaksi beserta SATU PAKET Baris Abu-abu induknya (1 - 3 baris) */
+    function alihkanItemDanHeader(prevItems, targetItemId, targetBulan, tglBaru) {
+      const targetItem = prevItems.find(it => it.id === targetItemId);
+      if (!targetItem) return { newItems: prevItems, bulanAsal: "", headerUraian: "" };
+
+      const bulanAsal = targetItem.bulan;
+      if (bulanAsal === targetBulan) {
+        return {
+          newItems: prevItems.map(it => it.id === targetItemId ? { ...it, tanggalRealisasi: tglBaru !== undefined ? tglBaru : it.tanggalRealisasi } : it),
+          bulanAsal,
+          headerUraian: ""
+        };
+      }
+
+      // Cari SATU PAKET Baris Abu-abu (1 - 3 baris bertingkat) yang menaungi item ini di bulan asal
+      const paketInduk = cariPaketHeaderItem(prevItems, targetItemId, bulanAsal);
+      const namaPaketList = paketInduk.map(h => h.uraian.trim());
+      const deskripsiPaket = namaPaketList.join(" » ");
+
+      // Periksa berapa banyak item transaksi yang masih tersisa di bulan asal di bawah paket yang sama
+      const itemTransaksiDiBulanAsalDenganPaketSama = prevItems.filter(it => {
+        if (it.bulan !== bulanAsal || !hasAngkaKodeRekening(it.kodeRekening) || it.id === targetItemId) return false;
+        const paketItemLain = cariPaketHeaderItem(prevItems, it.id, bulanAsal);
+        if (paketItemLain.length !== paketInduk.length) return false;
+        return paketItemLain.every((h, idx) => h.uraian.trim() === paketInduk[idx].uraian.trim());
+      });
+
+      const sisaTransaksiDiBulanAsal = itemTransaksiDiBulanAsalDenganPaketSama.length;
+
+      // Buat salinan data paket header untuk disimpan pada item
+      const paketHeaderRef = paketInduk.map(h => ({
+        kodeRekening: h.kodeRekening || "",
+        uraian: h.uraian || "",
+        penjelasan: h.penjelasan || ""
+      }));
+
+      // Siapkan daftar item baru dengan item target yang berpindah
+      let hasilItems = prevItems.map(it => {
+        if (it.id === targetItemId) {
+          const asalAwal = it.bulanAsal || bulanAsal;
+          return {
+            ...it,
+            bulan: targetBulan,
+            bulanAsal: asalAwal !== targetBulan ? asalAwal : "",
+            paketHeader: paketHeaderRef.length > 0 ? paketHeaderRef : (it.paketHeader || []),
+            kategoriUraian: deskripsiPaket || it.kategoriUraian || "",
+            tanggalRealisasi: tglBaru !== undefined ? tglBaru : it.tanggalRealisasi
+          };
+        }
+        return it;
+      });
+
+      // KETENTUAN 1: Jika di Bulan B belum ada paket baris abu-abu tersebut, bawa dan sisipkan SATU PAKET UTUH (1 - 3 baris)
+      if (paketInduk.length > 0) {
+        // Cek apakah di bulan tujuan sudah ada paket header yang identik
+        const itemsBulanTujuan = hasilItems.filter(it => it.bulan === targetBulan);
+        const sudahAdaDiBulanTujuan = paketInduk.every(hInduk => 
+          itemsBulanTujuan.some(itB => !hasAngkaKodeRekening(itB.kodeRekening) && itB.uraian.trim() === hInduk.uraian.trim())
+        );
+
+        if (!sudahAdaDiBulanTujuan) {
+          // Buat baris baru untuk seluruh paket (1 sampai 3 baris abu-abu)
+          const stamp = Date.now();
+          const paketBaruBulanB = paketInduk.map((hInduk, idx) => ({
+            id: `hdr_${stamp}_${idx}_${Math.random().toString(36).substr(2, 5)}`,
+            tahun: targetItem.tahun,
+            bulan: targetBulan,
+            kodeRekening: hInduk.kodeRekening || "",
+            uraian: hInduk.uraian || "",
+            penjelasan: hInduk.penjelasan || "",
+            volume: 0,
+            satuan: "",
+            tarifHarga: 0,
+            jumlah: 0,
+            realisasiBelanja: 0
+          }));
+
+          // Sisipkan seluruh paket baris abu-abu tepat sebelum item transaksi yang beralih
+          const targetIndex = hasilItems.findIndex(it => it.id === targetItemId);
+          if (targetIndex !== -1) {
+            hasilItems.splice(targetIndex, 0, ...paketBaruBulanB);
+          } else {
+            hasilItems.push(...paketBaruBulanB);
+          }
+        }
+      }
+
+      // KETENTUAN 2: Jika seluruh kode rekening di bawah paket tersebut di bulan A telah dialihkan (sisa 0),
+      // maka SATU PAKET baris abu-abu (seluruh 1-3 baris) di bulan A otomatis dihapus
+      if (paketInduk.length > 0 && sisaTransaksiDiBulanAsal === 0) {
+        const idsPaketHapus = new Set(paketInduk.map(h => h.id));
+        hasilItems = hasilItems.filter(it => !idsPaketHapus.has(it.id));
+      }
+
+      return {
+        newItems: hasilItems,
+        bulanAsal,
+        headerUraian: deskripsiPaket,
+        jumlahBarisPaket: paketInduk.length,
+        sisaTransaksiDiBulanAsal
+      };
+    }
+
     function App() {
       const [tahunAnggaran, setTahunAnggaran] = useState(() => {
         try {
@@ -505,39 +656,27 @@
             const monthIdx = parseInt(parts[1], 10) - 1;
             if (monthIdx >= 0 && monthIdx < 12) {
               const targetBulan = DAFTAR_BULAN[monthIdx];
-              let berpindah = false;
-              let bulanAsal = "";
+              const itemTarget = items.find(it => it.id === id);
 
-              setItems(prevItems => prevItems.map(it => {
-                if (it.id === id) {
-                  if (it.bulan !== targetBulan) {
-                    berpindah = true;
-                    bulanAsal = it.bulanAsal || it.bulan;
-                    return {
-                      ...it,
-                      tanggalRealisasi: value,
-                      bulan: targetBulan,
-                      bulanAsal: bulanAsal !== targetBulan ? bulanAsal : ""
-                    };
-                  } else {
-                    return {
-                      ...it,
-                      tanggalRealisasi: value
-                    };
-                  }
-                }
-                return it;
-              }));
+              if (itemTarget && itemTarget.bulan !== targetBulan) {
+                const { newItems, bulanAsal, headerUraian, jumlahBarisPaket, sisaTransaksiDiBulanAsal } = alihkanItemDanHeader(items, id, targetBulan, value);
 
-              if (berpindah) {
+                setItems(newItems);
                 setSelectedMonths(prev => prev.includes(targetBulan) ? prev : [...prev, targetBulan]);
+
+                const infoHeader = headerUraian 
+                  ? (sisaTransaksiDiBulanAsal === 0 
+                      ? `\nSatu paket (${jumlahBarisPaket} baris) judul kategori di bulan ${bulanAsal} otomatis ditutup dan kini tampil di bulan ${targetBulan} karena seluruh rekeningnya telah beralih.` 
+                      : `\nSatu paket (${jumlahBarisPaket} baris) judul kategori juga dimunculkan di bulan ${targetBulan}, sementara di bulan ${bulanAsal} tetap aktif menaungi ${sisaTransaksiDiBulanAsal} rekening sisa.`)
+                  : '';
+
                 tampilkanToast(
-                  `Tanggal realisasi masuk ke bulan ${targetBulan}. Rekening otomatis beralih ke tabel realisasi bulan ${targetBulan} dengan keterangan alihan dari bulan ${bulanAsal}.`,
+                  `Rekening berhasil dialihkan ke bulan ${targetBulan} (Realisasi Alihan dari ${bulanAsal}).${infoHeader}`,
                   "sukses",
                   `Beralih ke Bulan ${targetBulan}`
                 );
+                return;
               }
-              return;
             }
           }
         }
@@ -586,24 +725,21 @@
         e.preventDefault();
         if (!movingItem || !targetMoveMonth) return;
 
-        const bulanAsal = movingItem.bulanAsal || movingItem.bulan;
+        const { newItems, bulanAsal, headerUraian, jumlahBarisPaket, sisaTransaksiDiBulanAsal } = alihkanItemDanHeader(items, movingItem.id, targetMoveMonth);
 
-        setItems(prev => prev.map(it => {
-          if (it.id === movingItem.id) {
-            return {
-              ...it,
-              bulan: targetMoveMonth,
-              bulanAsal: bulanAsal !== targetMoveMonth ? bulanAsal : ""
-            };
-          }
-          return it;
-        }));
-
+        setItems(newItems);
         setSelectedMonths(prev => prev.includes(targetMoveMonth) ? prev : [...prev, targetMoveMonth]);
         setActiveMonth(targetMoveMonth);
         setIsMoveModalOpen(false);
+
+        const infoHeader = headerUraian 
+          ? (sisaTransaksiDiBulanAsal === 0 
+              ? ` Satu paket (${jumlahBarisPaket} baris) judul kategori di bulan ${bulanAsal} otomatis ditutup dan kini tampil di bulan ${targetMoveMonth} karena seluruh rekeningnya telah beralih.` 
+              : ` Satu paket (${jumlahBarisPaket} baris) judul kategori juga dimunculkan di bulan ${targetMoveMonth}, dan di bulan ${bulanAsal} tetap aktif menaungi ${sisaTransaksiDiBulanAsal} rekening sisa.`)
+          : '';
+
         tampilkanToast(
-          `Rekening dialihkan ke bulan ${targetMoveMonth}. Keterangan asal dari bulan ${bulanAsal} telah ditambahkan.`,
+          `Rekening dialihkan ke bulan ${targetMoveMonth}.${infoHeader}`,
           "sukses",
           "Realisasi Dialihkan"
         );
@@ -833,12 +969,27 @@
             }
 
             const newItems = [];
+            let paketHeaderAktif = [];
+
             for (let i = 1; i < rows.length; i++) {
               const r = rows[i];
               if (!r || (!r[1] && !r[2])) continue;
 
               const kode = String(r[1] || "").trim();
+              const uraianTeks = String(r[2] || "").trim();
               const isHeader = !hasAngkaKodeRekening(kode);
+
+              if (isHeader) {
+                // Jika baris sebelumnya adalah item transaksi, mulai paket baris abu-abu yang baru
+                if (newItems.length > 0 && hasAngkaKodeRekening(newItems[newItems.length - 1].kodeRekening)) {
+                  paketHeaderAktif = [];
+                }
+                paketHeaderAktif.push({
+                  kodeRekening: kode,
+                  uraian: uraianTeks,
+                  penjelasan: String(r[3] || "").trim()
+                });
+              }
 
               const volume = isHeader ? 0 : (parseFloat(r[4]) || 1);
               const tarif = isHeader ? 0 : (parseFloat(r[6]) || 0);
@@ -854,8 +1005,10 @@
                 id: `bosp_up_${Date.now()}_${i}`,
                 tahun: tahunAnggaran,
                 bulan: targetUploadMonth,
+                kategoriUraian: isHeader ? "" : paketHeaderAktif.map(h => h.uraian).join(" » "),
+                paketHeader: isHeader ? [] : [...paketHeaderAktif],
                 kodeRekening: kode,
-                uraian: String(r[2] || "").trim(),
+                uraian: uraianTeks,
                 penjelasan: String(r[3] || "").trim(),
                 volume,
                 satuan: isHeader ? "" : String(r[5] || "Paket").trim(),
