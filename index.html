@@ -497,7 +497,51 @@
         return itemsTahun.filter(it => hasAngkaKodeRekening(it.kodeRekening) && !cekKelengkapanSpj(it));
       }, [itemsTahun]);
 
+      /* Otomatis mengalihkan rekening ke Bulan B jika tanggal realisasinya diisi tanggal Bulan B */
       const handleInlineUpdate = (id, field, value) => {
+        if (field === 'tanggalRealisasi' && value) {
+          const parts = String(value).split('-');
+          if (parts.length === 3) {
+            const monthIdx = parseInt(parts[1], 10) - 1;
+            if (monthIdx >= 0 && monthIdx < 12) {
+              const targetBulan = DAFTAR_BULAN[monthIdx];
+              let berpindah = false;
+              let bulanAsal = "";
+
+              setItems(prevItems => prevItems.map(it => {
+                if (it.id === id) {
+                  if (it.bulan !== targetBulan) {
+                    berpindah = true;
+                    bulanAsal = it.bulanAsal || it.bulan;
+                    return {
+                      ...it,
+                      tanggalRealisasi: value,
+                      bulan: targetBulan,
+                      bulanAsal: bulanAsal !== targetBulan ? bulanAsal : ""
+                    };
+                  } else {
+                    return {
+                      ...it,
+                      tanggalRealisasi: value
+                    };
+                  }
+                }
+                return it;
+              }));
+
+              if (berpindah) {
+                setSelectedMonths(prev => prev.includes(targetBulan) ? prev : [...prev, targetBulan]);
+                tampilkanToast(
+                  `Tanggal realisasi masuk ke bulan ${targetBulan}. Rekening otomatis beralih ke tabel realisasi bulan ${targetBulan} dengan keterangan alihan dari bulan ${bulanAsal}.`,
+                  "sukses",
+                  `Beralih ke Bulan ${targetBulan}`
+                );
+              }
+              return;
+            }
+          }
+        }
+
         setItems(prevItems => prevItems.map(it => {
           if (it.id === id) {
             return {
@@ -1528,7 +1572,18 @@
                         return (
                           <tr key={item.id} className="hover:bg-[#17363C]/60 transition group border-b border-[#06B6D4]/10">
                             <td className="p-3 text-center font-bold text-[#A2BBC0]">{index + 1}</td>
-                            <td className="p-3 font-mono font-bold text-[#06B6D4]">{item.kodeRekening || '-'}</td>
+                            <td className="p-3 font-mono font-bold text-[#06B6D4]">
+                              <div>{item.kodeRekening || '-'}</div>
+                              {/* Keterangan Otomatis pada Kode Rekening jika merupakan Alihan dari Bulan Lain */}
+                              {item.bulanAsal && item.bulanAsal !== item.bulan && (
+                                <span 
+                                  className="inline-block px-2 py-0.5 mt-1 rounded text-[9.5px] font-sans font-semibold bg-amber-400/15 text-amber-300 border border-amber-400/30 whitespace-normal leading-tight"
+                                  title={`Alokasi awal belanja ini berada di bulan ${item.bulanAsal}, direalisasikan di bulan ${item.bulan}`}
+                                >
+                                  ( Realisasi Alihan dari Bulan {item.bulanAsal} )
+                                </span>
+                              )}
+                            </td>
                             <td className="p-3 font-semibold text-[#F3FEFF]">{item.uraian || '-'}</td>
                             <td className="p-3 text-[#A2BBC0] text-[11px] leading-relaxed">{item.penjelasan || '-'}</td>
                             
@@ -1619,7 +1674,7 @@
                                       <svg className="w-3 h-3 text-[#06B6D4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16l-4-4m0 0l4-4m-4 4h18"></path>
                                       </svg>
-                                      Realisasi Alihan dr Bulan {item.bulanAsal}
+                                      ( Realisasi Alihan dari Bulan {item.bulanAsal} )
                                     </span>
                                   </div>
                                 )}
