@@ -660,15 +660,22 @@
 
               if (itemTarget) {
                 const currentMonthIdx = DAFTAR_BULAN.indexOf(itemTarget.bulan);
+                const asalMonthIdx = itemTarget.bulanAsal ? DAFTAR_BULAN.indexOf(itemTarget.bulanAsal) : currentMonthIdx;
 
                 // ATURAN: Realisasi hanya diperbolehkan beralih ke bulan selanjutnya, tidak boleh ke bulan sebelumnya
+                // PENGECUALIAN: Khusus kode rekening hasil dialihkan, boleh dikembalikan ke bulan asalnya
                 if (monthIdx < currentMonthIdx) {
-                  tampilkanToast(
-                    `Realisasi tidak boleh dialihkan ke bulan sebelumnya (${targetBulan}). Belanja hanya dapat direalisasikan pada bulan ${itemTarget.bulan} atau bulan-bulan berikutnya.`,
-                    "peringatan",
-                    "Pengalihan Tidak Diizinkan"
-                  );
-                  return;
+                  const isKembaliKeAsal = itemTarget.bulanAsal && (monthIdx >= asalMonthIdx);
+                  if (!isKembaliKeAsal) {
+                    tampilkanToast(
+                      itemTarget.bulanAsal
+                        ? `Realisasi tidak boleh dialihkan ke bulan sebelum bulan asal (${itemTarget.bulanAsal}).`
+                        : `Realisasi tidak boleh dialihkan ke bulan sebelumnya (${targetBulan}). Belanja hanya dapat direalisasikan pada bulan ${itemTarget.bulan} atau bulan-bulan berikutnya.`,
+                      "peringatan",
+                      "Pengalihan Tidak Diizinkan"
+                    );
+                    return;
+                  }
                 }
 
                 if (itemTarget.bulan !== targetBulan) {
@@ -677,6 +684,7 @@
                   setItems(newItems);
                   setSelectedMonths(prev => prev.includes(targetBulan) ? prev : [...prev, targetBulan]);
 
+                  const isKembali = itemTarget.bulanAsal && targetBulan === itemTarget.bulanAsal;
                   const infoHeader = headerUraian 
                     ? (sisaTransaksiDiBulanAsal === 0 
                         ? `\nSatu paket (${jumlahBarisPaket} baris) judul kategori di bulan ${bulanAsal} otomatis ditutup dan kini tampil di bulan ${targetBulan} karena seluruh rekeningnya telah beralih.` 
@@ -684,9 +692,11 @@
                     : '';
 
                   tampilkanToast(
-                    `Rekening berhasil dialihkan ke bulan ${targetBulan} (Realisasi Alihan dari ${bulanAsal}).${infoHeader}`,
+                    isKembali
+                      ? `Rekening berhasil dikembalikan ke bulan asalnya (${targetBulan}).${infoHeader}`
+                      : `Rekening berhasil dialihkan ke bulan ${targetBulan} (Realisasi Alihan dari ${bulanAsal}).${infoHeader}`,
                     "sukses",
-                    `Beralih ke Bulan ${targetBulan}`
+                    isKembali ? `Kembali ke Bulan Asal (${targetBulan})` : `Beralih ke Bulan ${targetBulan}`
                   );
                   return;
                 }
@@ -729,12 +739,19 @@
       /* Fungsi untuk membuka dialog pengalihan realisasi ke bulan lain */
       const handleOpenMoveMonth = (item) => {
         const currentIdx = DAFTAR_BULAN.indexOf(item.bulan);
-        // Aturan: Hanya bulan-bulan setelah bulan belanja saat ini yang boleh dipilih
-        const kandidat = DAFTAR_BULAN.filter((b, idx) => idx > currentIdx);
+        const asalIdx = item.bulanAsal ? DAFTAR_BULAN.indexOf(item.bulanAsal) : currentIdx;
+
+        // Aturan: Bulan setelah bulan belanja saat ini, ATAU bulan asal jika merupakan hasil alihan
+        const kandidat = DAFTAR_BULAN.filter((b, idx) => {
+          if (idx === currentIdx) return false;
+          if (idx > currentIdx) return true;
+          if (item.bulanAsal && idx >= asalIdx) return true;
+          return false;
+        });
 
         if (kandidat.length === 0) {
           tampilkanToast(
-            `Rekening belanja pada bulan ${item.bulan} sudah berada di bulan anggaran terakhir. Tidak dapat dialihkan lagi ke bulan berikutnya.`,
+            `Rekening belanja pada bulan ${item.bulan} tidak dapat dialihkan lagi.`,
             "peringatan",
             "Bulan Terakhir"
           );
@@ -742,7 +759,7 @@
         }
 
         setMovingItem(item);
-        setTargetMoveMonth(kandidat[0]);
+        setTargetMoveMonth(item.bulanAsal || kandidat[0]);
         setIsMoveModalOpen(true);
       };
 
@@ -753,15 +770,21 @@
 
         const currentIdx = DAFTAR_BULAN.indexOf(movingItem.bulan);
         const targetIdx = DAFTAR_BULAN.indexOf(targetMoveMonth);
+        const asalIdx = movingItem.bulanAsal ? DAFTAR_BULAN.indexOf(movingItem.bulanAsal) : currentIdx;
 
-        // Validasi ketat: target tidak boleh sama atau sebelum bulan asal
+        // Validasi: target tidak boleh sebelum bulan saat ini KECUALI jika kembali ke bulan asal
         if (targetIdx <= currentIdx) {
-          tampilkanToast(
-            `Pengalihan hanya diperbolehkan ke bulan selanjutnya, tidak boleh ke bulan ${targetMoveMonth}.`,
-            "peringatan",
-            "Pengalihan Tidak Diizinkan"
-          );
-          return;
+          const isKembaliKeAsal = movingItem.bulanAsal && (targetIdx >= asalIdx);
+          if (!isKembaliKeAsal) {
+            tampilkanToast(
+              movingItem.bulanAsal
+                ? `Pengalihan tidak boleh ke bulan sebelum bulan asal (${movingItem.bulanAsal}).`
+                : `Pengalihan hanya diperbolehkan ke bulan selanjutnya, tidak boleh ke bulan ${targetMoveMonth}.`,
+              "peringatan",
+              "Pengalihan Tidak Diizinkan"
+            );
+            return;
+          }
         }
 
         const { newItems, bulanAsal, headerUraian, jumlahBarisPaket, sisaTransaksiDiBulanAsal } = alihkanItemDanHeader(items, movingItem.id, targetMoveMonth);
@@ -771,6 +794,7 @@
         setActiveMonth(targetMoveMonth);
         setIsMoveModalOpen(false);
 
+        const isKembali = movingItem.bulanAsal && targetMoveMonth === movingItem.bulanAsal;
         const infoHeader = headerUraian 
           ? (sisaTransaksiDiBulanAsal === 0 
               ? ` Satu paket (${jumlahBarisPaket} baris) judul kategori di bulan ${bulanAsal} otomatis ditutup dan kini tampil di bulan ${targetMoveMonth} karena seluruh rekeningnya telah beralih.` 
@@ -778,9 +802,11 @@
           : '';
 
         tampilkanToast(
-          `Rekening dialihkan ke bulan ${targetMoveMonth}.${infoHeader}`,
+          isKembali
+            ? `Rekening berhasil dikembalikan ke bulan asalnya (${targetMoveMonth}).${infoHeader}`
+            : `Rekening dialihkan ke bulan ${targetMoveMonth}.${infoHeader}`,
           "sukses",
-          "Realisasi Dialihkan"
+          isKembali ? "Dikembalikan ke Bulan Asal" : "Realisasi Dialihkan"
         );
       };
 
@@ -1793,8 +1819,12 @@
                             <td className="p-2 bg-[#06B6D4]/5 border-x border-[#06B6D4]/20">
                               {(() => {
                                 const curBlnIdx = DAFTAR_BULAN.indexOf(item.bulan);
-                                const minMonthStr = String(curBlnIdx >= 0 ? curBlnIdx + 1 : 1).padStart(2, '0');
+                                const asalBlnIdx = item.bulanAsal ? DAFTAR_BULAN.indexOf(item.bulanAsal) : curBlnIdx;
+                                const minIdx = Math.min(curBlnIdx, asalBlnIdx);
+                                const minMonthStr = String(minIdx >= 0 ? minIdx + 1 : 1).padStart(2, '0');
+                                const curMonthStr = String(curBlnIdx >= 0 ? curBlnIdx + 1 : 1).padStart(2, '0');
                                 const minDateStr = `${tahunAnggaran}-${minMonthStr}-01`;
+                                const curDateStr = `${tahunAnggaran}-${curMonthStr}-01`;
                                 const maxDateStr = `${tahunAnggaran}-12-31`;
 
                                 return (
@@ -1807,14 +1837,18 @@
                                       try {
                                         // Posisikan awal tampilan kalender tepat di bulan tabel yang sedang dibuka
                                         if (!item.tanggalRealisasi) {
-                                          handleInlineUpdate(item.id, 'tanggalRealisasi', minDateStr);
+                                          handleInlineUpdate(item.id, 'tanggalRealisasi', curDateStr);
                                         }
                                         e.target.showPicker();
                                       } catch (err) {}
                                     }}
                                     onChange={(e) => handleInlineUpdate(item.id, 'tanggalRealisasi', e.target.value)}
                                     className="w-full bg-[#041012] border border-[#06B6D4]/40 focus:border-[#06B6D4] rounded-lg px-2 py-1.5 text-xs text-[#F3FEFF] text-center cursor-pointer transition focus:outline-none"
-                                    title={`Klik untuk memilih tanggal (Bulan ${item.bulan} s.d. Desember ${tahunAnggaran})`}
+                                    title={
+                                      item.bulanAsal 
+                                        ? `Klik untuk memilih tanggal (Bulan Asal: ${item.bulanAsal} s.d. Desember ${tahunAnggaran})`
+                                        : `Klik untuk memilih tanggal (Bulan ${item.bulan} s.d. Desember ${tahunAnggaran})`
+                                    }
                                   />
                                 );
                               })()}
@@ -2412,19 +2446,37 @@
                     >
                       {DAFTAR_BULAN.map((b, idx) => {
                         const curIdx = DAFTAR_BULAN.indexOf(movingItem.bulan);
-                        const isSebelumnya = idx < curIdx;
+                        const asalIdx = movingItem.bulanAsal ? DAFTAR_BULAN.indexOf(movingItem.bulanAsal) : curIdx;
                         const isSama = idx === curIdx;
+                        const isBulanAsal = movingItem.bulanAsal && b === movingItem.bulanAsal;
+                        const isBolehKembali = movingItem.bulanAsal && (idx < curIdx) && (idx >= asalIdx);
+                        const isSebelumnyaTidakBoleh = (idx < curIdx) && !isBolehKembali;
+
+                        let keteranganPilihan = "(Bulan Selanjutnya)";
+                        if (isSama) keteranganPilihan = "(Bulan Saat Ini)";
+                        else if (isBulanAsal) keteranganPilihan = "(Bulan Asal - Boleh Dikembalikan)";
+                        else if (isBolehKembali) keteranganPilihan = `(Antara Bulan Asal ${movingItem.bulanAsal} s.d. Sekarang)`;
+                        else if (isSebelumnyaTidakBoleh) keteranganPilihan = "(Tidak Diizinkan)";
+
                         return (
-                          <option key={b} value={b} disabled={isSebelumnya || isSama}>
-                            {b} {isSama ? "(Bulan Saat Ini)" : isSebelumnya ? "(Bulan Sebelumnya - Tidak Diizinkan)" : "(Bulan Selanjutnya)"}
+                          <option key={b} value={b} disabled={isSebelumnyaTidakBoleh || isSama}>
+                            {b} {keteranganPilihan}
                           </option>
                         );
                       })}
                     </select>
                     <p className="text-[10px] text-[#A2BBC0] mt-1.5 leading-relaxed">
-                      Sesuai aturan, realisasi hanya dapat dialihkan ke <span className="text-[#A3E635] font-semibold">bulan berikutnya</span> (tidak boleh ke bulan sebelumnya). <br />
-                      Sistem akan secara otomatis menyematkan label: <br />
-                      <span className="text-[#06B6D4] font-semibold">"( Realisasi Alihan dari Bulan {movingItem.bulanAsal || movingItem.bulan} )"</span> pada kolom kode rekening di bulan tujuan.
+                      {movingItem.bulanAsal ? (
+                        <>
+                          Rekening ini dialihkan dari <span className="text-[#A3E635] font-semibold">Bulan {movingItem.bulanAsal}</span>. Khusus rekening alihan, rekening <span className="text-[#06B6D4] font-semibold">boleh dikembalikan ke bulan asalnya ({movingItem.bulanAsal})</span> atau dialihkan ke bulan berikutnya.
+                        </>
+                      ) : (
+                        <>
+                          Sesuai aturan, realisasi hanya dapat dialihkan ke <span className="text-[#A3E635] font-semibold">bulan berikutnya</span> (tidak boleh ke bulan sebelumnya). <br />
+                          Sistem akan otomatis menyematkan label: <br />
+                          <span className="text-[#06B6D4] font-semibold">"( Realisasi Alihan dari Bulan {movingItem.bulan} )"</span> pada kolom kode rekening di bulan tujuan.
+                        </>
+                      )}
                     </p>
                   </div>
 
