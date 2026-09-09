@@ -207,6 +207,11 @@ function doGet(e) {
 
     var values = dataSheet.getRange(2, 1, dataSheet.getLastRow() - 1, dataSheet.getLastColumn()).getValues();
     var items = values.map(function(r) {
+      var tokoVal = String(r[14] || "").trim();
+      // Cegah nilai selisih / nominal angka keliru masuk ke nama toko
+      if (/^-?\d+([.,]\d+)?$/.test(tokoVal.replace(/\s/g, ''))) {
+        tokoVal = "";
+      }
       return {
         id: String(r[0] || ""),
         tahun: Number(r[1]) || 2026,
@@ -221,8 +226,8 @@ function doGet(e) {
         tanggalRealisasi: r[10] instanceof Date ? Utilities.formatDate(r[10], "GMT+7", "yyyy-MM-dd") : String(r[10] || ""),
         bnuBpu: String(r[11] || ""),
         realisasiBelanja: Number(r[12]) || 0,
-        namaToko: String(r[13] || ""),
-        bulanAsal: String(r[14] || "")
+        namaToko: tokoVal,
+        bulanAsal: String(r[15] || "")
       };
     });
 
@@ -1080,7 +1085,9 @@ function doPost(e) {
 
             const tokoBersih = tokoDiambil.filter(filterBukanDummy);
             const itemsBersih = dataDiambil.map(it => {
-              if (it.namaToko && !filterBukanDummy(it.namaToko)) {
+              const tokoStr = String(it.namaToko || "").trim();
+              // Bersihkan jika nama toko terisi nominal angka akibat pergeseran kolom atau dummy
+              if (/^-?\d+([.,]\d+)?$/.test(tokoStr.replace(/\s/g, '')) || !filterBukanDummy(tokoStr)) {
                 return { ...it, namaToko: "" };
               }
               return it;
@@ -1244,7 +1251,16 @@ function doPost(e) {
           const saved = localStorage.getItem(STORAGE_KEY);
           if (saved) {
             const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed)) return parsed;
+            if (Array.isArray(parsed)) {
+              // Bersihkan otomatis jika ada nama toko yang terisi angka akibat pergeseran kolom sebelumnya
+              return parsed.map(it => {
+                const tokoStr = String(it.namaToko || "").trim();
+                if (/^-?\d+([.,]\d+)?$/.test(tokoStr.replace(/\s/g, ''))) {
+                  return { ...it, namaToko: "" };
+                }
+                return it;
+              });
+            }
           }
         } catch (e) {
           console.warn("Gagal membaca dari localStorage", e);
@@ -1764,6 +1780,10 @@ function doPost(e) {
                 tanggal = dateObj.toISOString().split('T')[0];
               }
 
+              const rawToko = String(r[12] || "").trim();
+              const isTokoAngka = /^-?\d+([.,]\d+)?$/.test(rawToko.replace(/\s/g, ''));
+              const namaTokoBersih = (isHeader || isTokoAngka) ? "" : rawToko;
+
               newItems.push({
                 id: `bosp_up_${Date.now()}_${i}`,
                 tahun: tahunAnggaran,
@@ -1780,7 +1800,7 @@ function doPost(e) {
                 tanggalRealisasi: isHeader ? "" : tanggal,
                 bnuBpu: isHeader ? "" : String(r[9] || "").trim(),
                 realisasiBelanja: isHeader ? 0 : (parseFloat(r[10]) || 0),
-                namaToko: isHeader ? "" : String(r[12] || "").trim()
+                namaToko: namaTokoBersih
               });
             }
 
